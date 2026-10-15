@@ -1081,6 +1081,9 @@ fn build_track_from_route(
     let mut ten_steps: Vec<TenWindow> = Vec::new();
     let mut speed_drift = 0.0f64;
 
+    let phi1 = ((seed & 0xFFFF) as f64 / 65535.0) * std::f64::consts::TAU;
+    let phi2 = (((seed >> 16) & 0xFFFF) as f64 / 65535.0) * std::f64::consts::TAU;
+
     for i in 0..n {
         let dt = dts[i];
         let (typ, lt) = kinds[i];
@@ -1125,8 +1128,8 @@ fn build_track_from_route(
         // 生物力学联动：增加宏观生理节律波，有快有慢：172~192 spm
         let v_now = speeds[i];
         let _km_done = (t_acc / dur_f) * dist / 1000.0;
-        let macro_wave = 5.5 * (std::f64::consts::TAU * t_acc / 210.0).sin()
-            + 3.2 * (std::f64::consts::TAU * t_acc / 130.0).cos();
+        let macro_wave = 5.0 * (std::f64::consts::TAU * t_acc / 190.0 + phi1).sin()
+            + 3.0 * (std::f64::consts::TAU * t_acc / 115.0 + phi2).cos();
         let cad_target = (cadences[i] + macro_wave).clamp(168.0, 198.0);
         let stride = (v_now * 60.0 / cad_target).clamp(0.32, 1.25);
         let cad = v_now * 60.0 / stride;

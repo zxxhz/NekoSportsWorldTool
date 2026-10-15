@@ -92,22 +92,27 @@ pub fn pace_profile(
     let normal = Normal::<f64>::new(0.0, 1.0).unwrap();
     let total_time_est: f64 = dts.iter().sum::<f64>().max(1.0);
 
-    // ① 平稳自然的「前快后慢」体能曲线（参考真实学生跑步数据）：
-    //   - 起程体能充沛（比平均配速快 6%~7%，如 7'17" 均速起步约 6'48"）；
-    //   - 中程平缓巡航自然过渡到平均配速（7'17"）；
-    //   - 后程渐进疲劳平滑减速（比平均配速慢 6%~7%，后程约 7'50"）；
-    //   - 采用平滑三次 S 曲线 + 微幅平滑扰动（消除折线图大幅剧烈跳变与锯齿，保持自然微波带）。
+    // ① 平稳自然的「前快后慢」体能曲线 + 真人多谐波「忽快忽慢」自然体能波浪：
+    //   - 宏观趋势：起程体能充沛（均速前偏快 6%~7%），后程渐进疲劳平缓减速（均速后偏慢 6%~7%）；
+    //   - 中周期生理节律波（周期 1.5~3.5 分钟，幅度约 ±5%~7%，配速浮动 ±20~30秒/km）：真实模拟真人跑步过程中自然的快慢起伏；
+    //   - 采用平滑波浪 + 惯性阻尼滤波，消除折线图断崖与高频梳子毛刺，呈现连绵起伏的自然微波带。
     let mut w = Vec::with_capacity(n);
     let mut v = v0 * 1.07;
     let mut t = 0.0;
+    let phi1 = ((seed & 0xFFFF) as f64 / 65535.0) * std::f64::consts::TAU;
+    let phi2 = (((seed >> 16) & 0xFFFF) as f64 / 65535.0) * std::f64::consts::TAU;
     for &dt in dts {
         let u = (t / total_time_est).clamp(0.0, 1.0);
         // S 形平滑过渡因子：从 u=0 时的 1.07 渐变到 u=1 时的 0.93，积分均值严格为 1.00
         let s_curve = 3.0 * u * u - 2.0 * u * u * u;
-        let pacing_factor = 1.07 - 0.14 * s_curve;
+        let base_pacing = 1.07 - 0.14 * s_curve;
+        // 真人户外跑步的多谐波中周期忽快忽慢起伏（约 3 分钟与 1.8 分钟复合节律）
+        let natural_wave = 0.055 * (std::f64::consts::TAU * t / 190.0 + phi1).sin()
+            + 0.035 * (std::f64::consts::TAU * t / 115.0 + phi2).cos();
+        let pacing_factor = base_pacing + natural_wave;
         let target_v = (v0 * pacing_factor).clamp(floor, ceil);
-        // 自然平缓的步频/体能微波动（每步标准差微幅控制在 0.005，彻底消除上下大幅震荡）
-        v = v + 0.10 * (target_v - v) * dt + 0.005 * dt.sqrt() * normal.sample(&mut rng);
+        // 柔和的一阶连续惯性跟踪（消除高频毛刺尖峰，保留波浪起伏）
+        v = v + 0.08 * (target_v - v) * dt + 0.003 * dt.sqrt() * normal.sample(&mut rng);
         v = v.clamp(floor, ceil);
         w.push(v);
         t += dt;

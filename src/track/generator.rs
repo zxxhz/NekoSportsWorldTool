@@ -62,6 +62,9 @@ pub fn smooth_ten_sec_windows(
     let base_v = (dist / dur_f.max(1.0)).clamp(SPEED_FLOOR + 0.05, SPEED_CEIL - 0.05);
     let mut rng = Rng::new(seed.wrapping_add(0x85EB_CA6B_14E5_B231));
 
+    let phi1 = ((seed & 0xFFFF) as f64 / 65535.0) * std::f64::consts::TAU;
+    let phi2 = (((seed >> 16) & 0xFFFF) as f64 / 65535.0) * std::f64::consts::TAU;
+
     let mut speeds: Vec<f64> = Vec::with_capacity(m);
     let mut drift = 0.0f64;
 
@@ -71,7 +74,11 @@ pub fn smooth_ten_sec_windows(
         let u = (mid_t / dur_f.max(1.0)).clamp(0.0, 1.0);
         // S 形自然体能衰减（起步快 6~7%，终点慢 6~7%，全程积分均值严格为 1.00）
         let s_curve = 3.0 * u * u - 2.0 * u * u * u;
-        let pacing_factor = 1.07 - 0.14 * s_curve;
+        let base_pacing = 1.07 - 0.14 * s_curve;
+        // 真人跑步的多谐波中周期忽快忽慢自然起伏波浪（周期约 3.1 分钟与 1.9 分钟，配速浮动 ±20~30秒/km）
+        let natural_wave = 0.055 * (std::f64::consts::TAU * mid_t / 190.0 + phi1).sin()
+            + 0.035 * (std::f64::consts::TAU * mid_t / 115.0 + phi2).cos();
+        let pacing_factor = base_pacing + natural_wave;
         let mut target_v = base_v * pacing_factor;
 
         // 若开启中途喘息/缓行设置：在行程 50%~65% 之间插入一次自然的微降速槽（慢跑喘息，限制在 9'10"~9'30"，绝不上探到步行更绝不标红）
@@ -126,13 +133,16 @@ pub fn smooth_ten_sec_windows(
         }
     }
 
-    // 联动计算步频步数：均值约 185 spm，均值步幅约 74cm
+    // 联动计算步频步数：均值约 185 spm，与配速起伏自然共振（提速期 186~193 spm，舒缓期 175~182 spm）
     let mut steps_vals: Vec<f64> = Vec::with_capacity(m);
     for i in 0..m {
         let win_t = windows_speed[i].time as f64;
+        let mid_t = (i as f64 * 10.0 + win_t * 0.5).min(dur_f);
         let d = vals[i];
         let v = d / win_t.max(0.1);
-        let cad = (175.0 + 3.8 * v + rng.gauss(0.0, 0.8)).clamp(168.0, 198.0);
+        let cad_wave = 5.0 * (std::f64::consts::TAU * mid_t / 190.0 + phi1).sin()
+            + 3.0 * (std::f64::consts::TAU * mid_t / 115.0 + phi2).cos();
+        let cad = (175.0 + 3.8 * v + cad_wave + rng.gauss(0.0, 0.6)).clamp(168.0, 198.0);
         let st = (cad / 60.0 * win_t).round();
         steps_vals.push(st.clamp((win_t * 2.5).round(), (win_t * 4.2).round()));
     }
@@ -250,11 +260,13 @@ fn build_from_ring(
     let local_floor = (base * 0.90).max(SPEED_FLOOR);
     let local_ceil = (base * 1.10).min(SPEED_CEIL).max(local_floor + 0.05);
 
-    // 平稳自然的「前快后慢」体能曲线（参考真实学生跑步数据）：
-    //   - 起程体能充沛（比平均配速快 6%~7%，如 7'17" 均速起步约 6'48"）；
-    //   - 中程平缓巡航过渡到平均配速（7'17"）；
-    //   - 后程渐进疲劳平缓减速（比平均配速慢 6%~7%，后程约 7'50"）；
-    //   - 采用平滑三次 S 曲线 + 微幅平滑扰动（彻底消除上下大幅震荡与锯齿）。
+    // 平稳自然的「前快后慢」体能曲线 + 真人多谐波「忽快忽慢」自然体能起伏：
+    //   - 宏观趋势：起程体能充沛（比平均配速快 6%~7%），后程渐进疲劳平缓减速（比平均配速慢 6%~7%）；
+    //   - 中周期生理波浪（周期约 1.5~3.5 分钟，配速起伏 ±20~30秒/km）：真实模拟真人跑动中的节奏波动；
+    //   - 采用平滑多谐波 + 一阶惯性阻尼滤波，消除尖锐跳跃，呈现连绵起伏的自然波浪。
+    let phi1 = ((seed & 0xFFFF) as f64 / 65535.0) * std::f64::consts::TAU;
+    let phi2 = (((seed >> 16) & 0xFFFF) as f64 / 65535.0) * std::f64::consts::TAU;
+
     let mut w = Vec::with_capacity(n);
     let mut v = (base * 1.07).clamp(local_floor, local_ceil);
     for i in 0..n {
@@ -262,9 +274,12 @@ fn build_from_ring(
         let dt = dts[i];
         let u = (tt / dur_f).clamp(0.0, 1.0);
         let s_curve = 3.0 * u * u - 2.0 * u * u * u;
-        let pacing_factor = 1.07 - 0.14 * s_curve;
+        let base_pacing = 1.07 - 0.14 * s_curve;
+        let natural_wave = 0.055 * (std::f64::consts::TAU * tt / 190.0 + phi1).sin()
+            + 0.035 * (std::f64::consts::TAU * tt / 115.0 + phi2).cos();
+        let pacing_factor = base_pacing + natural_wave;
         let target_v = (base * pacing_factor).clamp(local_floor, local_ceil);
-        v = v + 0.10 * (target_v - v) * dt + rng.gauss(0.0, 0.005);
+        v = v + 0.08 * (target_v - v) * dt + rng.gauss(0.0, 0.003);
         v = v.clamp(local_floor, local_ceil);
         w.push(v);
     }
@@ -354,9 +369,9 @@ fn build_from_ring(
         let km_done = (t_acc / dur_f) * dist / 1000.0;
         let fat = route_planner::fatigue_from_km(km_done);
         let gait = route_planner::gait(v_now, fat);
-        // 宏观步频节律波（周期约 2.5~4 分钟，带来自然的有快有慢节奏感）
-        let macro_wave = 5.5 * (std::f64::consts::TAU * t_acc / 210.0).sin()
-            + 3.2 * (std::f64::consts::TAU * t_acc / 130.0).cos();
+        // 宏观步频节律波（周期约 3.1 分钟与 1.9 分钟，与配速起伏同频共振，有快有慢：172~192 spm）
+        let macro_wave = 5.0 * (std::f64::consts::TAU * t_acc / 190.0 + phi1).sin()
+            + 3.0 * (std::f64::consts::TAU * t_acc / 115.0 + phi2).cos();
         let u_artifact = rng.random();
         let cad = if u_artifact < 0.010 {
             rng.uniform(230.0, 290.0) // 模拟口袋晃动瞬时峰值
