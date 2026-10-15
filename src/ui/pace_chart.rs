@@ -62,7 +62,7 @@ pub fn fmt_time_val(sec: i64) -> String {
 }
 
 /// 根据目标总里程、用时和随机种子预计算配速曲线（与实际提交完全一致）
-pub fn build_pace_preview(dist_m: f64, dur_s: i64, seed: u64) -> PacePreview {
+pub fn build_pace_preview(dist_m: f64, dur_s: i64, seed: u64, allow_mid_slowdown: bool) -> PacePreview {
     if dist_m <= 10.0 || dur_s <= 5 {
         return PacePreview::default();
     }
@@ -87,8 +87,8 @@ pub fn build_pace_preview(dist_m: f64, dur_s: i64, seed: u64) -> PacePreview {
         ten_steps[m - 1].time = last_t;
     }
 
-    // 调用与实际提交一致的平滑算法
-    smooth_ten_sec_windows(dur_s, dist_m, seed, &mut ten_speed, &mut ten_steps);
+    // 调用与实际提交一致的平滑算法（含中途喘息缓行与末尾防冲刺斜率限制）
+    smooth_ten_sec_windows(dur_s, dist_m, seed, allow_mid_slowdown, &mut ten_speed, &mut ten_steps);
 
     let mut windows = Vec::with_capacity(m);
     let mut cum_d = 0.0f64;
@@ -470,7 +470,7 @@ mod tests {
 
     #[test]
     fn test_build_pace_preview_windows_and_splits() {
-        let p = build_pace_preview(2350.0, 1020, 42);
+        let p = build_pace_preview(2350.0, 1020, 42, false);
         assert!(!p.windows.is_empty());
         assert!(!p.laps.is_empty());
         assert_eq!(p.laps.len(), 3); // 1km, 2km, 350m
@@ -481,5 +481,21 @@ mod tests {
 
         // 验证首公里比末公里快（自然体能前快后慢）
         assert!(p.laps[0].pace_s_per_km < p.laps[1].pace_s_per_km);
+
+        // 验证最后一个残余时间窗（1020s % 10 = 0，换一个非整10秒测试末尾无异常冲刺）
+        let p_odd = build_pace_preview(2350.0, 1023, 42, false);
+        let last_w = p_odd.windows.last().unwrap();
+        let prev_w = &p_odd.windows[p_odd.windows.len() - 2];
+        // 最后一个窗口配速必须连续（与倒数第二窗配速差异小于 15秒/km），绝不突然暴飙到 4'00"
+        assert!(
+            (last_w.pace_s_per_km - prev_w.pace_s_per_km).abs() < 15.0,
+            "末端残余窗口发生突兀加速: prev={} last={}",
+            last_w.pace_s_per_km, prev_w.pace_s_per_km
+        );
+
+        // 验证开启中途喘息降速：中段配速有自然的平缓波谷（降速槽），且绝不越出 10'00" 标红
+        let p_slow = build_pace_preview(2350.0, 1020, 42, true);
+        assert!(p_slow.max_pace_s <= 600.0, "中途降速绝不标红超标");
+        assert!(p_slow.max_pace_s > p.max_pace_s, "开启中途缓行后应有更深入的缓跑喘息段");
     }
 }

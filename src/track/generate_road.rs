@@ -1210,7 +1210,15 @@ fn build_track_from_route(
         });
     }
     // 消除离散时间窗锯齿与大幅跳变，生成平稳连续、符合自然生理律动的 10 秒配速曲线
-    super::generator::smooth_ten_sec_windows(dur, dist, seed, &mut ten_speed, &mut ten_steps);
+    let allow_mid_slowdown = crate::api::model::load_config().allow_mid_slowdown;
+    super::generator::smooth_ten_sec_windows(
+        dur,
+        dist,
+        seed,
+        allow_mid_slowdown,
+        &mut ten_speed,
+        &mut ten_steps,
+    );
 
     let mut segments: Vec<Segment> = Vec::new();
     let (mut seg_t, mut seg_d) = (0.0f64, 0.0f64);

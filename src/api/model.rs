@@ -119,6 +119,9 @@ pub struct Config {
     /// 地图底图源：gaode | osm | vector。
     #[serde(default = "default_tile_source")]
     pub tile_source: String,
+    /// 是否允许中途喘息降速（在行程约 55%~60% 处自然插入一段 8'30"~9'30" 的缓行慢跑，安全不标红）。
+    #[serde(default)]
+    pub allow_mid_slowdown: bool,
 }
 
 fn default_allowed_skip() -> i64 {
@@ -207,6 +210,7 @@ impl Default for Config {
             loop_exit_mode: default_loop_exit(),
             allowed_skip_ordinary: default_allowed_skip(),
             tile_source: default_tile_source(),
+            allow_mid_slowdown: false,
         }
     }
 }

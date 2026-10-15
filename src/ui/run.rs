@@ -101,6 +101,8 @@ pub struct RunPage {
     pub pace_preview: Option<super::pace_chart::PacePreview>,
     /// 是否展开配速折线图预演卡片
     pub show_pace_chart: bool,
+    /// 是否允许中途缓行喘息降速
+    pub allow_mid_slowdown: bool,
 }
 
 /// 一次提交的确定方案（进入页面/参数变更时抽样生成）。
@@ -283,6 +285,7 @@ impl RunPage {
             dist * 1000.0,
             dur,
             seed,
+            self.allow_mid_slowdown,
         ));
     }
 
@@ -534,6 +537,24 @@ impl App {
             }
             ui.toggle_value(&mut self.run_page.show_pace_chart, "📈 配速折线图")
                 .on_hover_text("展开/收起本次跑步配速折线图与每公里分段预演");
+            let mut slowdown = self.config.allow_mid_slowdown;
+            if ui
+                .checkbox(&mut slowdown, "中途缓行休整")
+                .on_hover_text("模拟真实跑步在行程中段（约55%~60%处）停顿/放慢慢跑喘息20~30秒（平缓降至 9'10\"~9'30\"，安全绝不标红），折线图实时呈现波谷")
+                .changed()
+            {
+                self.config.allow_mid_slowdown = slowdown;
+                self.run_page.allow_mid_slowdown = slowdown;
+                let _ = crate::api::model::save_config(&self.config);
+                if let Some(plan) = &self.run_page.plan {
+                    self.run_page.pace_preview = Some(super::pace_chart::build_pace_preview(
+                        plan.dist * 1000.0,
+                        plan.dur,
+                        plan.seed,
+                        slowdown,
+                    ));
+                }
+            }
         });
 
         // 渲染配速折线图预演（含 10 秒时间窗微波、均速基准线、交互光标 HUD 与公里分段）
@@ -1953,5 +1974,13 @@ mod tests {
         let prev2 = p.pace_preview.as_ref().expect("换一版后应刷新配速预演");
         assert!(!prev2.windows.is_empty());
         assert!(!prev2.laps.is_empty());
+        let prev2_max = prev2.max_pace_s;
+
+        // 验证开启中途喘息缓行降速：折线图自动呈现安全的缓行降速谷底
+        p.allow_mid_slowdown = true;
+        p.regen_plan();
+        let prev_slow_max = p.pace_preview.as_ref().unwrap().max_pace_s;
+        assert!(prev_slow_max <= 600.0, "中途缓行降速绝不标红超标");
+        assert!(prev_slow_max > prev2_max, "开启中途缓行后最大配速应深于关闭状态");
     }
 }

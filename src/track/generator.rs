@@ -43,12 +43,14 @@ pub fn fit_speeds_bounded(w: &mut [f64], dts: &[f64], target: f64, floor: f64, c
 /// 平滑 10 秒时间窗（彻底消除折线图大幅跳动与锯齿，呈现平稳自然的真实体能微波曲线）。
 ///
 /// 真实跑步中，10 秒时间窗位移是极度平滑连续的（相邻窗口差值通常 <0.35m，即配速变动 <8秒/km）。
-/// 本函数根据目标总距离、总时长及前快后慢体能曲线生成平滑基准，叠加一阶连续 AR(1) 微波，
-/// 并严格归一化守恒总距离，同时满足步频/步幅生物力学约束。
+/// 本函数根据目标总距离、总时长及前快后慢体能曲线生成平滑基准，并在【速度维度（m/s）】
+/// 进行一阶连续斜率滤波（防止末尾不足 10 秒的残余时间窗因位移截断而被错误放大成终点冲刺），
+/// 并可由开关自由决定是否在行程中段（50%~65%）插入自然的喘息缓行降速槽（安全不标红）。
 pub fn smooth_ten_sec_windows(
     dur: i64,
     dist: f64,
     seed: u64,
+    allow_mid_slowdown: bool,
     windows_speed: &mut Vec<TenWindow>,
     windows_steps: &mut Vec<TenWindow>,
 ) {
@@ -60,8 +62,7 @@ pub fn smooth_ten_sec_windows(
     let base_v = (dist / dur_f.max(1.0)).clamp(SPEED_FLOOR + 0.05, SPEED_CEIL - 0.05);
     let mut rng = Rng::new(seed.wrapping_add(0x85EB_CA6B_14E5_B231));
 
-    let mut vals: Vec<f64> = Vec::with_capacity(m);
-    let mut steps_vals: Vec<f64> = Vec::with_capacity(m);
+    let mut speeds: Vec<f64> = Vec::with_capacity(m);
     let mut drift = 0.0f64;
 
     for i in 0..m {
@@ -71,31 +72,47 @@ pub fn smooth_ten_sec_windows(
         // S 形自然体能衰减（起步快 6~7%，终点慢 6~7%，全程积分均值严格为 1.00）
         let s_curve = 3.0 * u * u - 2.0 * u * u * u;
         let pacing_factor = 1.07 - 0.14 * s_curve;
-        let target_v = base_v * pacing_factor;
+        let mut target_v = base_v * pacing_factor;
 
-        // AR(1) 微幅生理律动（标准差仅 0.006 m/s，相邻窗变动 < 0.20m）
-        drift = 0.72 * drift + rng.gauss(0.0, 0.006);
+        // 若开启中途喘息/缓行设置：在行程 50%~65% 之间插入一次自然的微降速槽（慢跑喘息，限制在 9'10"~9'30"，绝不上探到步行更绝不标红）
+        if allow_mid_slowdown && m >= 8 {
+            let u_mid = (u - 0.58) / 0.08;
+            if u_mid.abs() < 2.0 {
+                let dip = (-0.5 * u_mid * u_mid).exp();
+                let slow_v = (base_v * 0.78).max(SPEED_FLOOR + 0.06);
+                target_v = target_v * (1.0 - 0.82 * dip) + slow_v * (0.82 * dip);
+            }
+        }
+
+        // AR(1) 微幅生理律动（标准差仅 0.005 m/s，相邻窗变动 < 0.15m）
+        drift = 0.72 * drift + rng.gauss(0.0, 0.005);
         let cur_v = (target_v + drift).clamp(SPEED_FLOOR, SPEED_CEIL);
-        let d = cur_v * win_t;
-        vals.push(d);
+        speeds.push(cur_v);
     }
 
-    // 相邻窗口平滑限斜率（slew rate limiter）：相邻 10 秒窗口位移差不超过 0.35m
+    // 相邻窗口平滑限斜率（slew rate limiter）：改在【速度维度（m/s）】进行！
+    // 约束每 10 秒速度变动不超过 0.035 m/s（即每 10 秒配速变动 < 8 秒/km），
+    // 彻底消除末尾残余时间窗（如 3s、7s）因时间不同导致位移被误放大的末端冲刺尖峰！
     for i in 1..m {
-        let max_step = 0.35 * (windows_speed[i].time as f64 / 10.0);
-        let diff = vals[i] - vals[i - 1];
-        if diff.abs() > max_step {
-            vals[i] = vals[i - 1] + diff.signum() * max_step;
+        let max_dv = 0.035;
+        let diff = speeds[i] - speeds[i - 1];
+        if diff.abs() > max_dv {
+            speeds[i] = speeds[i - 1] + diff.signum() * max_dv;
         }
     }
     // 逆向反扫一次，保证双向连续无突兀拐点
     for i in (0..m - 1).rev() {
-        let max_step = 0.35 * (windows_speed[i].time as f64 / 10.0);
-        let diff = vals[i] - vals[i + 1];
-        if diff.abs() > max_step {
-            vals[i] = vals[i + 1] + diff.signum() * max_step;
+        let max_dv = 0.035;
+        let diff = speeds[i] - speeds[i + 1];
+        if diff.abs() > max_dv {
+            speeds[i] = speeds[i + 1] + diff.signum() * max_dv;
         }
     }
+
+    // 由连续速度换算为窗口位移 vals[i] = speeds[i] * win_t
+    let mut vals: Vec<f64> = (0..m)
+        .map(|i| speeds[i] * (windows_speed[i].time as f64))
+        .collect();
 
     // 归一化缩放：精确守恒目标总位移
     let cur_sum: f64 = vals.iter().sum();
@@ -110,14 +127,14 @@ pub fn smooth_ten_sec_windows(
     }
 
     // 联动计算步频步数：均值约 185 spm，均值步幅约 74cm
+    let mut steps_vals: Vec<f64> = Vec::with_capacity(m);
     for i in 0..m {
         let win_t = windows_speed[i].time as f64;
         let d = vals[i];
         let v = d / win_t.max(0.1);
-        // 速度稍快时步频略升（182~188），步幅约 72~76cm
         let cad = (175.0 + 3.8 * v + rng.gauss(0.0, 0.8)).clamp(168.0, 198.0);
         let st = (cad / 60.0 * win_t).round();
-        steps_vals.push(st.clamp(25.0, 42.0));
+        steps_vals.push(st.clamp((win_t * 2.5).round(), (win_t * 4.2).round()));
     }
 
     // 回写到原数组
@@ -421,7 +438,15 @@ fn build_from_ring(
         ten_steps.push(TenWindow { time: 10, value: round_to(out_st, 0) });
     }
     // 消除离散时间窗锯齿与大幅跳变，生成平稳连续、符合自然生理律动的 10 秒配速曲线
-    smooth_ten_sec_windows(dur, dist, seed, &mut ten_speed, &mut ten_steps);
+    let allow_mid_slowdown = crate::api::model::load_config().allow_mid_slowdown;
+    smooth_ten_sec_windows(
+        dur,
+        dist,
+        seed,
+        allow_mid_slowdown,
+        &mut ten_speed,
+        &mut ten_steps,
+    );
 
     let mut segments: Vec<Segment> = Vec::new();
     let (mut seg_t, mut seg_d, mut seg_n) = (0.0f64, 0.0f64, 0i64);

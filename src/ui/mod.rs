@@ -372,6 +372,7 @@ impl App {
                 map_fitted: false,
                 pace_preview: None,
                 show_pace_chart: true,
+                allow_mid_slowdown: config.allow_mid_slowdown,
             },
             ai_page: ai::AiPage {
                 days: 1,
