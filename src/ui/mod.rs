@@ -18,6 +18,7 @@ pub mod map;
 pub mod mobile;
 pub mod msgs;
 pub mod osm;
+pub mod pace_chart;
 pub mod records;
 pub mod run;
 pub mod theme;
@@ -369,6 +370,8 @@ impl App {
                 preview: None,
                 preview_stale: true,
                 map_fitted: false,
+                pace_preview: None,
+                show_pace_chart: true,
             },
             ai_page: ai::AiPage {
                 days: 1,

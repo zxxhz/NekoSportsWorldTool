@@ -97,6 +97,10 @@ pub struct RunPage {
     pub preview_stale: bool,
     /// 地图视野是否已适配
     pub map_fitted: bool,
+    /// 配速折线图预演数据（所见即所得）
+    pub pace_preview: Option<super::pace_chart::PacePreview>,
+    /// 是否展开配速折线图预演卡片
+    pub show_pace_chart: bool,
 }
 
 /// 一次提交的确定方案（进入页面/参数变更时抽样生成）。
@@ -256,6 +260,7 @@ impl RunPage {
 
     /// 把当前参数与已算好的量写成方案。
     fn write_plan(&mut self, dist: f64, pace: f32, dur: i64, start_ms: i64) {
+        let seed = rand::random::<u64>();
         self.plan = Some(RunPlan {
             dist_min: self.dist_min,
             dist_max: self.dist_max,
@@ -270,9 +275,15 @@ impl RunPage {
             pace,
             dur,
             start_ms,
-            seed: rand::random::<u64>(),
+            seed,
         });
         self.preview_stale = true;
+        // 同步计算配速折线图预演（与实际提交的 10 秒时间窗算法及种子完全一致，所见即所得）
+        self.pace_preview = Some(super::pace_chart::build_pace_preview(
+            dist * 1000.0,
+            dur,
+            seed,
+        ));
     }
 
     /// 「换一版」：重掷运动量；随机模式下同时换一个开始时刻。
@@ -521,7 +532,17 @@ impl App {
             if ui.small_button("换一版").clicked() {
                 self.run_page.regen_plan();
             }
+            ui.toggle_value(&mut self.run_page.show_pace_chart, "📈 配速折线图")
+                .on_hover_text("展开/收起本次跑步配速折线图与每公里分段预演");
         });
+
+        // 渲染配速折线图预演（含 10 秒时间窗微波、均速基准线、交互光标 HUD 与公里分段）
+        if self.run_page.show_pace_chart {
+            if let Some(preview) = &self.run_page.pace_preview {
+                super::pace_chart::draw_pace_preview_card(ui, preview);
+                ui.add_space(4.0);
+            }
+        }
 
         self.draw_run_map(ui);
 
@@ -1642,8 +1663,10 @@ mod tests {
         let mut p = page(1, 0);
         p.hour = 23;
         p.minute = 59;
+        let before_ms = crate::crypto::envelope::now_ms();
         p.regen_plan();
         let plan = p.plan.clone().unwrap();
+        let after_ms = crate::crypto::envelope::now_ms();
 
         let today = now.date_naive();
         let want = Local
@@ -1651,11 +1674,13 @@ mod tests {
             .single()
             .unwrap()
             .timestamp_millis();
-        let now_ms = crate::crypto::envelope::now_ms();
-        assert_eq!(
-            plan.start_ms,
-            want.min(now_ms),
-            "指定时刻未按 min(填入, 现在) 处理"
+        assert!(
+            plan.start_ms <= want,
+            "指定时刻不能晚于填入值"
+        );
+        assert!(
+            plan.start_ms >= before_ms && plan.start_ms <= after_ms,
+            "指定时刻未按 min(填入, 现在) 钳制在当前时间"
         );
         assert_start_not_future(&plan);
     }
@@ -1907,5 +1932,26 @@ mod tests {
             "修改路线长度后方案距离 {} 未同步到 3.40km",
             plan.dist
         );
+    }
+
+    /// 验证方案生成与「换一版」能够自动同步生成配速折线图预演与公里分段数据。
+    #[test]
+    fn pace_preview_syncs_with_plan_and_shuffle() {
+        let mut p = page(0, 0);
+        p.dist_min = 2.0;
+        p.dist_max = 2.4;
+        p.ensure_plan();
+
+        let prev = p.pace_preview.as_ref().expect("应自动生成配速预演");
+        assert!(!prev.windows.is_empty(), "10秒时间窗预演不应为空");
+        assert!(!prev.laps.is_empty(), "公里分段不应为空");
+        assert_eq!(prev.laps.len(), 3); // 2.x km 应有 3 个分段 (1km, 2km, 残段)
+        assert!(prev.avg_pace_s >= 240.0 && prev.avg_pace_s <= 600.0);
+
+        // 点击「换一版」后，折线图数据应同步刷新且依然有效
+        p.regen_plan();
+        let prev2 = p.pace_preview.as_ref().expect("换一版后应刷新配速预演");
+        assert!(!prev2.windows.is_empty());
+        assert!(!prev2.laps.is_empty());
     }
 }
