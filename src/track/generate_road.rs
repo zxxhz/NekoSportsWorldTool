@@ -997,6 +997,7 @@ fn build_track_from_route(
         ..Default::default()
     };
     let base_v = avg_v.clamp(SPEED_FLOOR + 0.05, SPEED_CEIL - 0.05);
+    let base_pace_s = 1000.0 / base_v.max(0.1);
     let local_floor = (base_v * 0.90).max(SPEED_FLOOR);
     let local_ceil = (base_v * 1.10).min(SPEED_CEIL).max(local_floor + 0.05);
     let speed_seed = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -1142,11 +1143,16 @@ fn build_track_from_route(
         // 当配速快时数值较小（如 6.4 分/公里），慢时数值较大（如 7.8 分/公里），
         // 配合一阶 AR(1) 连续平滑，彻底消除梳子状高频尖峰与正反颠倒！
         let pace_min = 1000.0 / (avg_sp * 60.0);
-        speed_drift = 0.82 * speed_drift + rng.gauss(0.0, 0.012);
+        speed_drift = 0.82 * speed_drift + rng.gauss(0.0, 0.005);
+        let min_allowed_pace = (base_pace_s - 10.5) / 60.0;
+        let max_allowed_pace = (base_pace_s + 10.5) / 60.0;
         let point_pace = if i <= 1 {
             0.0
         } else {
-            round_to((pace_min + speed_drift).clamp(4.0, 9.8), 4)
+            round_to(
+                (pace_min + speed_drift).clamp(min_allowed_pace, max_allowed_pace),
+                4,
+            )
         };
 
         ten_t += dt;

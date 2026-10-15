@@ -254,19 +254,29 @@ mod validation_tests {
             route_planner::CustomCloseMode::Open,
             &wps,
         );
-        // 验证 10 秒时间窗与定位点速度语义完全一致：前快（配速数值小）后慢（配速数值大）
-        assert!(!track.speedPerTenSec.is_empty());
-        let first_win = &track.speedPerTenSec[0];
-        let last_win = track.speedPerTenSec.last().unwrap();
-        let first_p = 1000.0 / (first_win.value / first_win.time as f64);
-        let last_p = 1000.0 / (last_win.value / last_win.time as f64);
-        assert!(first_p < last_p, "前程配速应当快于（数值小于）尾程配速: first={} last={}", first_p, last_p);
+        let base_pace_s = 1753.0 / (4125.0 / 1000.0); // 425.0s (7'05")
 
-        // 验证 allLocJson 中的 speed 字段（App 解析的配速）前快后慢（前程数值小，后程数值大），绝不颠倒
-        let first_loc = &track.locations[2];
-        let last_loc = &track.locations[track.locations.len() - 3];
-        assert!(first_loc.speed < last_loc.speed, "定位点配速字段应前小后大: first={} last={}", first_loc.speed, last_loc.speed);
-        // 验证首点无突发 6'11" 跳跃，平滑等于后续点
+        // 验证 10 秒时间窗严格在基准配速 ±10 秒狭窄走廊内微澜起伏（如 7'05" 严格浮动在 6'55"~7'15"）
+        assert!(!track.speedPerTenSec.is_empty());
+        for win in &track.speedPerTenSec {
+            let win_p = 1000.0 / (win.value / win.time as f64);
+            assert!(
+                (win_p - base_pace_s).abs() <= 10.5,
+                "10秒窗配速 {:.1}s 越出目标基准配速 {:.1}s ±10秒波动走廊",
+                win_p, base_pace_s
+            );
+        }
+
+        // 验证 allLocJson 中的 speed 字段（App 解析的配速分/公里）严格处于 (base_pace ± 11s)/60 范围内
+        for loc in &track.locations[2..track.locations.len() - 1] {
+            let loc_pace_s = loc.speed * 60.0;
+            assert!(
+                (loc_pace_s - base_pace_s).abs() <= 11.0,
+                "定位点配速 {:.1}s 越出目标配速 {:.1}s ±10秒范围",
+                loc_pace_s, base_pace_s
+            );
+        }
+        // 验证首点平滑等于真实起步点
         assert_eq!(track.locations[0].speed, track.locations[2].speed);
     }
 }

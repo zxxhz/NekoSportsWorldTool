@@ -92,29 +92,27 @@ pub fn pace_profile(
     let normal = Normal::<f64>::new(0.0, 1.0).unwrap();
     let total_time_est: f64 = dts.iter().sum::<f64>().max(1.0);
 
-    // ① 平稳自然的「前快后慢」体能曲线 + 真人多谐波「忽快忽慢」自然体能波浪：
-    //   - 宏观趋势：起程体能充沛（均速前偏快 6%~7%），后程渐进疲劳平缓减速（均速后偏慢 6%~7%）；
-    //   - 中周期生理节律波（周期 1.5~3.5 分钟，幅度约 ±5%~7%，配速浮动 ±20~30秒/km）：真实模拟真人跑步过程中自然的快慢起伏；
-    //   - 采用平滑波浪 + 惯性阻尼滤波，消除折线图断崖与高频梳子毛刺，呈现连绵起伏的自然微波带。
+    // ① 严格锚定目标配速：在目标配速基准线上做 ±10 秒上下自然窄幅浮动（如 6'20" 严格浮动在 6'10"~6'30"）
+    let base_pace_s = 1000.0 / v0.max(0.1);
     let mut w = Vec::with_capacity(n);
-    let mut v = v0 * 1.07;
     let mut t = 0.0;
     let phi1 = ((seed & 0xFFFF) as f64 / 65535.0) * std::f64::consts::TAU;
     let phi2 = (((seed >> 16) & 0xFFFF) as f64 / 65535.0) * std::f64::consts::TAU;
+    let mut drift_s = 0.0f64;
+
     for &dt in dts {
         let u = (t / total_time_est).clamp(0.0, 1.0);
-        // S 形平滑过渡因子：从 u=0 时的 1.07 渐变到 u=1 时的 0.93，积分均值严格为 1.00
+        // 微幅体能漂移：从 u=0 时的 -3秒（微快）渐变到 u=1 时的 +3秒（微慢）
         let s_curve = 3.0 * u * u - 2.0 * u * u * u;
-        let base_pacing = 1.07 - 0.14 * s_curve;
-        // 真人户外跑步的多谐波中周期忽快忽慢起伏（约 3 分钟与 1.8 分钟复合节律）
-        let natural_wave = 0.055 * (std::f64::consts::TAU * t / 190.0 + phi1).sin()
-            + 0.035 * (std::f64::consts::TAU * t / 115.0 + phi2).cos();
-        let pacing_factor = base_pacing + natural_wave;
-        let target_v = (v0 * pacing_factor).clamp(floor, ceil);
-        // 柔和的一阶连续惯性跟踪（消除高频毛刺尖峰，保留波浪起伏）
-        v = v + 0.08 * (target_v - v) * dt + 0.003 * dt.sqrt() * normal.sample(&mut rng);
-        v = v.clamp(floor, ceil);
-        w.push(v);
+        let trend_s = -3.0 + 6.0 * s_curve;
+        // 中周期自然节律微波：在 ±5 秒内柔和微澜起伏
+        let wave_s = 3.8 * (std::f64::consts::TAU * t / 150.0 + phi1).sin()
+            + 2.2 * (std::f64::consts::TAU * t / 90.0 + phi2).cos();
+        drift_s = 0.75 * drift_s + 0.3 * normal.sample(&mut rng);
+        let delta_s = (trend_s + wave_s + drift_s).clamp(-10.0, 10.0);
+        let cur_pace_s = (base_pace_s + delta_s).clamp(240.0, 600.0);
+        let cur_v = (1000.0 / cur_pace_s).clamp(floor, ceil);
+        w.push(cur_v);
         t += dt;
     }
 
