@@ -1079,6 +1079,7 @@ fn build_track_from_route(
     let mut ten_st = 0.0f64;
     let mut ten_speed: Vec<TenWindow> = Vec::new();
     let mut ten_steps: Vec<TenWindow> = Vec::new();
+    let mut speed_drift = 0.0f64;
 
     for i in 0..n {
         let dt = dts[i];
@@ -1121,24 +1122,28 @@ fn build_track_from_route(
         dist_acc += d_step;
         let (lat, lng) = to_bd(px, py, c_lat, c_lng);
         alt += 0.04 * (82.0 - alt) + rng.gauss(0.0, alt_sigma);
-        // 生物力学联动：v=(cad/60)·stride，平均步幅约 74cm，平均步频约 185spm
+        // 生物力学联动：增加宏观生理节律波，有快有慢：172~192 spm
         let v_now = speeds[i];
-        let stride = (v_now * 60.0 / cadences[i]).clamp(0.32, 1.25);
+        let _km_done = (t_acc / dur_f) * dist / 1000.0;
+        let macro_wave = 5.5 * (std::f64::consts::TAU * t_acc / 210.0).sin()
+            + 3.2 * (std::f64::consts::TAU * t_acc / 130.0).cos();
+        let cad_target = (cadences[i] + macro_wave).clamp(168.0, 198.0);
+        let stride = (v_now * 60.0 / cad_target).clamp(0.32, 1.25);
         let cad = v_now * 60.0 / stride;
         steps_acc += cad / 60.0 * dt;
         let nxt = pos(s + 2.0);
         let brg =
             ((nxt.0 - x).atan2(nxt.1 - y).to_degrees() + rng.gauss(0.0, 35.0)).rem_euclid(360.0);
         let avg_sp = round_to((d_step / dt.max(0.1)).clamp(SPEED_FLOOR, SPEED_CEIL), 4);
-        let kmh = avg_sp * 3.6;
-        let sigma = (kmh * 0.06).max(0.05);
-        let gps_speed = if i <= 1 {
+        // 关键修复：官方 App 的折线图直接将 allLocJson 中的 "speed" 字段解析为【配速（分/公里）】！
+        // 当配速快时数值较小（如 6.4 分/公里），慢时数值较大（如 7.8 分/公里），
+        // 配合一阶 AR(1) 连续平滑，彻底消除梳子状高频尖峰与正反颠倒！
+        let pace_min = 1000.0 / (avg_sp * 60.0);
+        speed_drift = 0.82 * speed_drift + rng.gauss(0.0, 0.012);
+        let point_pace = if i <= 1 {
             0.0
         } else {
-            round_to(
-                (kmh + rng.gauss(0.0, sigma)).clamp(SPEED_FLOOR * 3.6, SPEED_CEIL * 3.6),
-                4,
-            )
+            round_to((pace_min + speed_drift).clamp(4.0, 9.8), 4)
         };
 
         ten_t += dt;
@@ -1169,7 +1174,7 @@ fn build_track_from_route(
             lng: -1.0,
             gLat: round_to(lat, 7),
             gLng: round_to(lng, 7),
-            speed: round_to(gps_speed, 4),
+            speed: round_to(point_pace, 4),
             avgSpeed: avg_sp,
             radius: rad,
             accuracy: rad,
@@ -1188,7 +1193,7 @@ fn build_track_from_route(
             coorType: "gcj02".into(),
             bdA: round_to(alt, 2),
             bdD: round_to(brg, 2),
-            bdS: round_to((avg_sp * rng.uniform(0.6, 0.95)).max(0.0), 3),
+            bdS: round_to(avg_sp, 4),
             bdG: rng.choice(&[1, 1, 1, -1]),
             count: rng.randint(20, 88),
             dtr: 0.0,

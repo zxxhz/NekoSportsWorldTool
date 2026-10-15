@@ -239,6 +239,36 @@ mod validation_tests {
             );
         }
     }
+
+    #[test]
+    fn inspect_29min_run_monotonic_and_smooth() {
+        let visited_pt = (38.901678, 121.540241);
+        let next_pt = (38.906000, 121.540241);
+        let wps = vec![visited_pt, next_pt];
+        let track = crate::track::generator::build_ordered_mode(
+            4125.0,
+            1753,
+            42,
+            1_700_000_000_000,
+            &wps,
+            route_planner::CustomCloseMode::Open,
+            &wps,
+        );
+        // 验证 10 秒时间窗与定位点速度语义完全一致：前快（配速数值小）后慢（配速数值大）
+        assert!(!track.speedPerTenSec.is_empty());
+        let first_win = &track.speedPerTenSec[0];
+        let last_win = track.speedPerTenSec.last().unwrap();
+        let first_p = 1000.0 / (first_win.value / first_win.time as f64);
+        let last_p = 1000.0 / (last_win.value / last_win.time as f64);
+        assert!(first_p < last_p, "前程配速应当快于（数值小于）尾程配速: first={} last={}", first_p, last_p);
+
+        // 验证 allLocJson 中的 speed 字段（App 解析的配速）前快后慢（前程数值小，后程数值大），绝不颠倒
+        let first_loc = &track.locations[2];
+        let last_loc = &track.locations[track.locations.len() - 3];
+        assert!(first_loc.speed < last_loc.speed, "定位点配速字段应前小后大: first={} last={}", first_loc.speed, last_loc.speed);
+        // 验证首点无突发 6'11" 跳跃，平滑等于后续点
+        assert_eq!(track.locations[0].speed, track.locations[2].speed);
+    }
 }
 
 /// 10s 时间窗，id=(rrid%100000)*1000+窗口序秒（6 个真人样本跨 9 月记录验证一致；

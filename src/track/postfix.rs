@@ -49,14 +49,16 @@ pub fn apply_post_fixes(locs: &mut [GenPoint], rng: &mut Rng, start_ms: i64) {
         e.locType = 1;
         e.radius = round_to(rng.uniform(1.5, 3.0), 2);
     }
-    // 边界修正①：索引2 首个真实点 avgSpeed 不跨哨兵计算，并保持在有效窗口内
+    // 边界修正①：索引2 首个真实点 avgSpeed 与 speed 平滑承接，消除断崖
     if locs.len() > 3 {
+        let next_sp = locs[3].avgSpeed;
         let p2 = &mut locs[2];
-        p2.avgSpeed = round_to(p2.totalDis / 1.0f64.max(p2.totalTime as f64), 4)
-            .clamp(crate::track::generator::SPEED_FLOOR, crate::track::generator::SPEED_CEIL);
-        p2.speed = round_to(p2.avgSpeed * 3.6, 4);
+        if p2.avgSpeed <= 0.0 || p2.avgSpeed < crate::track::generator::SPEED_FLOOR {
+            p2.avgSpeed = next_sp;
+            p2.speed = round_to(1000.0 / (next_sp * 60.0), 4);
+        }
     }
-    // 首点 = 起点：totalTime=0、type∈{0,7}、速度取首个非零值
+    // 首点 = 起点：totalTime=0、type∈{0,7}、速度/配速取首个非零真实点，消除突发跳变尖峰
     if !locs.is_empty() {
         locs[0].totalTime = 0;
         locs[0].validTime = 0;
@@ -67,12 +69,10 @@ pub fn apply_post_fixes(locs: &mut [GenPoint], rng: &mut Rng, start_ms: i64) {
         for j in 1..locs.len() {
             if locs[j].avgSpeed > 0.0 {
                 locs[0].avgSpeed = locs[j].avgSpeed;
+                locs[0].speed = locs[j].speed;
                 locs[0].bdS = locs[j].bdS;
                 break;
             }
-        }
-        if locs[0].speed == 0.0 {
-            locs[0].speed = round_to(rng.uniform(7.0, 12.5), 4);
         }
     }
 }
