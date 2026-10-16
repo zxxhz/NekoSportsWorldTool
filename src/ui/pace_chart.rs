@@ -493,56 +493,59 @@ pub fn draw_pace_preview_card(ui: &mut egui::Ui, preview: &PacePreview) {
     });
 }
 
-/// 绘制步频折线图卡片（完全还原官方 App 截图版式与色彩：Y 轴 140~210 spm、起跑热身慢步频爬升、自然波浪填充、交互光标 HUD 与分公里步频卡片）
+/// 绘制步频图卡片（完全还原官方 App 截图版式与色彩：Y 轴 0~250 spm、大号统计头、翡翠绿圆角胶囊条柱阵列、交互光标 HUD 与分公里步频卡片）
 pub fn draw_cadence_preview_card(ui: &mut egui::Ui, preview: &PacePreview) {
     if preview.windows.is_empty() {
         return;
     }
 
     ui.group(|ui| {
-        // 头部统计：大号标题 + 平均/最高/最低步频（对齐 App 截图版式）
+        // 头部统计：大号标题 + 平均/最大/最小步频（完全对齐 App 截图版式）
         ui.horizontal(|ui| {
             ui.heading(
                 egui::RichText::new("步频")
-                    .size(16.0)
+                    .size(18.0)
                     .strong()
                     .color(Color32::from_rgb(15, 23, 42)),
             );
             ui.label(
                 egui::RichText::new("(步/分钟)")
-                    .size(12.0)
+                    .size(12.5)
                     .color(Color32::from_rgb(100, 116, 139)),
             );
-            ui.add_space(16.0);
-            ui.colored_label(
-                Color32::from_rgb(100, 116, 139),
-                "平均步频",
+            ui.add_space(20.0);
+            ui.label(
+                egui::RichText::new("平均步频")
+                    .size(13.0)
+                    .color(Color32::from_rgb(100, 116, 139)),
             );
             ui.label(
                 egui::RichText::new(format!("{:.0}", preview.avg_cadence))
-                    .size(15.0)
+                    .size(18.0)
                     .strong()
                     .color(Color32::from_rgb(15, 23, 42)),
             );
-            ui.add_space(12.0);
-            ui.colored_label(
-                Color32::from_rgb(100, 116, 139),
-                "最高步频",
+            ui.add_space(18.0);
+            ui.label(
+                egui::RichText::new("最大")
+                    .size(13.0)
+                    .color(Color32::from_rgb(100, 116, 139)),
             );
             ui.label(
                 egui::RichText::new(format!("{:.0}", preview.max_cadence))
-                    .size(15.0)
+                    .size(18.0)
                     .strong()
                     .color(Color32::from_rgb(15, 23, 42)),
             );
-            ui.add_space(12.0);
-            ui.colored_label(
-                Color32::from_rgb(100, 116, 139),
-                "最低步频",
+            ui.add_space(18.0);
+            ui.label(
+                egui::RichText::new("最小")
+                    .size(13.0)
+                    .color(Color32::from_rgb(100, 116, 139)),
             );
             ui.label(
                 egui::RichText::new(format!("{:.0}", preview.min_cadence))
-                    .size(15.0)
+                    .size(18.0)
                     .strong()
                     .color(Color32::from_rgb(15, 23, 42)),
             );
@@ -551,14 +554,14 @@ pub fn draw_cadence_preview_card(ui: &mut egui::Ui, preview: &PacePreview) {
         ui.add_space(2.0);
 
         // 步频图主画布
-        let canvas_h = 160.0f32;
+        let canvas_h = 170.0f32;
         let (response, painter) = ui.allocate_painter(
             Vec2::new(ui.available_width().max(280.0), canvas_h),
             egui::Sense::hover(),
         );
         let canvas = response.rect;
 
-        let pad_left = 50.0f32;
+        let pad_left = 44.0f32;
         let pad_right = 16.0f32;
         let pad_top = 14.0f32;
         let pad_bottom = 22.0f32;
@@ -572,7 +575,7 @@ pub fn draw_cadence_preview_card(ui: &mut egui::Ui, preview: &PacePreview) {
         painter.rect_filled(
             canvas,
             egui::Rounding::same(4.0),
-            Color32::from_rgb(248, 250, 252),
+            Color32::from_rgb(252, 252, 253),
         );
         painter.rect_stroke(
             canvas,
@@ -580,10 +583,10 @@ pub fn draw_cadence_preview_card(ui: &mut egui::Ui, preview: &PacePreview) {
             Stroke::new(1.0_f32, Color32::from_rgb(226, 232, 240)),
         );
 
-        // Y 轴范围：步频为正向轴（上方数值大，如 210；下方数值小，如 140/150）
-        let y_bot = 140.0f64;
-        let y_top = 210.0f64;
-        let y_span = (y_top - y_bot).max(10.0);
+        // Y 轴范围：0 ~ 250 spm（完全对齐 App 截图 0, 50, 100, 150, 200, 250 标尺）
+        let y_bot = 0.0f64;
+        let _y_top = 250.0f64;
+        let y_span = 250.0f64;
 
         let to_plot_y = |cad: f64| -> f32 {
             let ratio = ((cad - y_bot) / y_span).clamp(0.0, 1.0) as f32;
@@ -596,15 +599,20 @@ pub fn draw_cadence_preview_card(ui: &mut egui::Ui, preview: &PacePreview) {
             plot_rect.left() + ratio * plot_rect.width()
         };
 
-        // 绘制 Y 轴水平辅助刻度线（如 150, 165, 180, 195, 210）
-        for tick_val in [150, 165, 180, 195, 210] {
+        // 绘制 Y 轴水平刻度辅助线（0, 50, 100, 150, 200, 250）
+        for tick_val in [0, 50, 100, 150, 200, 250] {
             let yy = to_plot_y(tick_val as f64);
+            let stroke_color = if tick_val == 0 {
+                Color32::from_rgb(203, 213, 225)
+            } else {
+                Color32::from_rgb(238, 242, 246)
+            };
             painter.line_segment(
                 [
                     Pos2::new(plot_rect.left(), yy),
                     Pos2::new(plot_rect.right(), yy),
                 ],
-                Stroke::new(1.0_f32, Color32::from_rgb(235, 238, 242)),
+                Stroke::new(1.0_f32, stroke_color),
             );
             painter.text(
                 Pos2::new(plot_rect.left() - 6.0, yy),
@@ -615,96 +623,46 @@ pub fn draw_cadence_preview_card(ui: &mut egui::Ui, preview: &PacePreview) {
             );
         }
 
-        // 绘制平均步频基准线（暖珊瑚橙虚线）
-        let avg_y = to_plot_y(preview.avg_cadence);
-        painter.line_segment(
-            [
-                Pos2::new(plot_rect.left(), avg_y),
-                Pos2::new(plot_rect.right(), avg_y),
-            ],
-            Stroke::new(1.2_f32, Color32::from_rgb(234, 88, 12)),
-        );
-        painter.text(
-            Pos2::new(plot_rect.right() - 2.0, avg_y - 8.0),
-            egui::Align2::RIGHT_BOTTOM,
-            format!("均频 {:.0}", preview.avg_cadence),
-            egui::FontId::proportional(10.5),
-            Color32::from_rgb(194, 65, 12),
-        );
-
-        // 绘制公里竖向虚线标记
-        let total_km = preview.total_dis_m / 1000.0;
-        for km_i in 1..=(total_km.floor() as i64) {
-            let km_target = km_i as f64 * 1000.0;
-            if let Some(w) = preview.windows.iter().find(|w| w.cum_dist_m >= km_target) {
-                let xx = to_plot_x(w.time_s);
-                painter.line_segment(
-                    [
-                        Pos2::new(xx, plot_rect.top()),
-                        Pos2::new(xx, plot_rect.bottom()),
-                    ],
-                    Stroke::new(1.0_f32, Color32::from_rgb(203, 213, 225)),
-                );
-                painter.text(
-                    Pos2::new(xx, plot_rect.bottom() + 4.0),
-                    egui::Align2::CENTER_TOP,
-                    format!("{km_i}km"),
-                    egui::FontId::proportional(10.5),
-                    Color32::from_rgb(100, 116, 139),
-                );
-            }
+        // 绘制底部 5 个均匀时间刻度（0:00, 1/4, 1/2, 3/4, 结束时刻，对齐 App 截图）
+        let total_dur = preview.total_dur_s;
+        for i in 0..=4 {
+            let t_val = (total_dur as f64 * (i as f64 / 4.0)).round() as i64;
+            let xx = to_plot_x(t_val as f64);
+            let align = if i == 0 {
+                egui::Align2::LEFT_TOP
+            } else if i == 4 {
+                egui::Align2::RIGHT_TOP
+            } else {
+                egui::Align2::CENTER_TOP
+            };
+            painter.text(
+                Pos2::new(xx, plot_rect.bottom() + 4.0),
+                align,
+                fmt_time_val(t_val),
+                egui::FontId::proportional(11.0),
+                Color32::from_rgb(148, 163, 184),
+            );
         }
 
-        // 绘制底部首尾时间刻度
-        painter.text(
-            Pos2::new(plot_rect.left(), plot_rect.bottom() + 4.0),
-            egui::Align2::LEFT_TOP,
-            "00:00",
-            egui::FontId::proportional(10.5),
-            Color32::from_rgb(148, 163, 184),
-        );
-        painter.text(
-            Pos2::new(plot_rect.right(), plot_rect.bottom() + 4.0),
-            egui::Align2::RIGHT_TOP,
-            fmt_time_val(preview.total_dur_s),
-            egui::FontId::proportional(10.5),
-            Color32::from_rgb(148, 163, 184),
-        );
+        // 绘制每个 10 秒窗口的翡翠绿圆角胶囊条（Capsule Bar / Pill，完全还原 App 截图展现形式）
+        let m = preview.windows.len();
+        let pill_w = (plot_rect.width() / m.max(1) as f32 * 0.44).clamp(3.5, 6.0);
+        let pill_color = Color32::from_rgb(52, 211, 153); // 翡翠薄荷绿，与 App 截图一致
 
-        // 生成点列并绘制下方半透明填充多边形（暖橙色珊瑚渐变）
-        let pts: Vec<Pos2> = preview
-            .windows
-            .iter()
-            .map(|w| Pos2::new(to_plot_x(w.time_s), to_plot_y(w.cadence)))
-            .collect();
-
-        if pts.len() >= 2 {
-            let mut fill_polygon = Vec::with_capacity(pts.len() + 2);
-            fill_polygon.push(Pos2::new(pts[0].x, plot_rect.bottom()));
-            fill_polygon.extend(pts.iter().copied());
-            fill_polygon.push(Pos2::new(pts.last().unwrap().x, plot_rect.bottom()));
-
-            let fill_mesh = egui::epaint::Mesh {
-                indices: (1..fill_polygon.len() as u32 - 1)
-                    .flat_map(|i| vec![0, i, i + 1])
-                    .collect(),
-                vertices: fill_polygon
-                    .iter()
-                    .map(|&p| egui::epaint::Vertex {
-                        pos: p,
-                        uv: egui::epaint::WHITE_UV,
-                        color: Color32::from_rgba_unmultiplied(249, 115, 22, 35),
-                    })
-                    .collect(),
-                texture_id: egui::TextureId::default(),
-            };
-            painter.add(fill_mesh);
-
-            // 绘制主步频折线（动感橙色）
-            painter.add(egui::Shape::line(
-                pts.clone(),
-                Stroke::new(2.2_f32, Color32::from_rgb(249, 115, 22)),
-            ));
+        for w in &preview.windows {
+            let cx = to_plot_x(w.time_s);
+            let cy = to_plot_y(w.cadence);
+            // 胶囊柱高度约 8.5 像素，圆角胶囊状
+            let half_h = 4.5f32;
+            let pill_rect = Rect::from_min_max(
+                Pos2::new(cx - pill_w * 0.5, cy - half_h),
+                Pos2::new(cx + pill_w * 0.5, cy + half_h),
+            );
+            painter.rect_filled(
+                pill_rect,
+                egui::Rounding::same(pill_w * 0.5),
+                pill_color,
+            );
         }
 
         // 交互光标悬停拾取
@@ -726,13 +684,22 @@ pub fn draw_cadence_preview_card(ui: &mut egui::Ui, preview: &PacePreview) {
                             Pos2::new(h_x, plot_rect.top()),
                             Pos2::new(h_x, plot_rect.bottom()),
                         ],
-                        Stroke::new(1.0_f32, Color32::from_rgb(71, 85, 105)),
+                        Stroke::new(1.0_f32, Color32::from_rgb(148, 163, 184)),
                     );
 
-                    painter.circle_filled(Pos2::new(h_x, h_y), 4.5, Color32::from_rgb(249, 115, 22));
-                    painter.circle_stroke(
-                        Pos2::new(h_x, h_y),
-                        4.5,
+                    // 高亮选中的胶囊条
+                    let pill_rect = Rect::from_min_max(
+                        Pos2::new(h_x - pill_w * 0.5 - 1.0, h_y - 5.5),
+                        Pos2::new(h_x + pill_w * 0.5 + 1.0, h_y + 5.5),
+                    );
+                    painter.rect_filled(
+                        pill_rect,
+                        egui::Rounding::same(pill_w * 0.5),
+                        Color32::from_rgb(16, 185, 129),
+                    );
+                    painter.rect_stroke(
+                        pill_rect,
+                        egui::Rounding::same(pill_w * 0.5),
                         Stroke::new(1.5_f32, Color32::WHITE),
                     );
 
@@ -786,7 +753,7 @@ pub fn draw_cadence_preview_card(ui: &mut egui::Ui, preview: &PacePreview) {
                 ui.label(
                     egui::RichText::new(badge_text)
                         .size(11.5)
-                        .color(Color32::from_rgb(194, 65, 12)),
+                        .color(Color32::from_rgb(16, 185, 129)),
                 )
                 .on_hover_text(tooltip);
                 ui.add_space(4.0);
