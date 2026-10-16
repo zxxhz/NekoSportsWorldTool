@@ -42,6 +42,9 @@ pub struct PacePreview {
     pub avg_pace_s: f64,
     pub total_dis_m: f64,
     pub total_dur_s: i64,
+    pub min_cadence: f64,
+    pub max_cadence: f64,
+    pub avg_cadence: f64,
 }
 
 /// 格式化配速（如 437s → 7'17"/km）
@@ -165,6 +168,10 @@ pub fn build_pace_preview(dist_m: f64, dur_s: i64, seed: u64, allow_mid_slowdown
         }
     }
 
+    let min_cad = windows.iter().map(|w| w.cadence).fold(f64::INFINITY, f64::min);
+    let max_cad = windows.iter().map(|w| w.cadence).fold(f64::NEG_INFINITY, f64::max);
+    let avg_cad = (acc_st / (dur_s as f64 / 60.0)).clamp(150.0, 210.0);
+
     PacePreview {
         windows,
         laps,
@@ -173,6 +180,28 @@ pub fn build_pace_preview(dist_m: f64, dur_s: i64, seed: u64, allow_mid_slowdown
         avg_pace_s: avg_pace,
         total_dis_m: dist_m,
         total_dur_s: dur_s,
+        min_cadence: if min_cad.is_finite() { min_cad } else { 160.0 },
+        max_cadence: if max_cad.is_finite() { max_cad } else { 195.0 },
+        avg_cadence: avg_cad,
+    }
+}
+
+/// 预演图表切换视图模式
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ChartViewMode {
+    #[default]
+    Pace,
+    Cadence,
+    Both,
+}
+
+impl ChartViewMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            ChartViewMode::Pace => "📈 配速折线图",
+            ChartViewMode::Cadence => "🏃 步频折线图",
+            ChartViewMode::Both => "📊 配速+步频并列",
+        }
     }
 }
 
@@ -462,6 +491,337 @@ pub fn draw_pace_preview_card(ui: &mut egui::Ui, preview: &PacePreview) {
             }
         });
     });
+}
+
+/// 绘制步频折线图卡片（完全还原官方 App 截图版式与色彩：Y 轴 140~210 spm、起跑热身慢步频爬升、自然波浪填充、交互光标 HUD 与分公里步频卡片）
+pub fn draw_cadence_preview_card(ui: &mut egui::Ui, preview: &PacePreview) {
+    if preview.windows.is_empty() {
+        return;
+    }
+
+    ui.group(|ui| {
+        // 头部统计：大号标题 + 平均/最高/最低步频（对齐 App 截图版式）
+        ui.horizontal(|ui| {
+            ui.heading(
+                egui::RichText::new("步频")
+                    .size(16.0)
+                    .strong()
+                    .color(Color32::from_rgb(15, 23, 42)),
+            );
+            ui.label(
+                egui::RichText::new("(步/分钟)")
+                    .size(12.0)
+                    .color(Color32::from_rgb(100, 116, 139)),
+            );
+            ui.add_space(16.0);
+            ui.colored_label(
+                Color32::from_rgb(100, 116, 139),
+                "平均步频",
+            );
+            ui.label(
+                egui::RichText::new(format!("{:.0}", preview.avg_cadence))
+                    .size(15.0)
+                    .strong()
+                    .color(Color32::from_rgb(15, 23, 42)),
+            );
+            ui.add_space(12.0);
+            ui.colored_label(
+                Color32::from_rgb(100, 116, 139),
+                "最高步频",
+            );
+            ui.label(
+                egui::RichText::new(format!("{:.0}", preview.max_cadence))
+                    .size(15.0)
+                    .strong()
+                    .color(Color32::from_rgb(15, 23, 42)),
+            );
+            ui.add_space(12.0);
+            ui.colored_label(
+                Color32::from_rgb(100, 116, 139),
+                "最低步频",
+            );
+            ui.label(
+                egui::RichText::new(format!("{:.0}", preview.min_cadence))
+                    .size(15.0)
+                    .strong()
+                    .color(Color32::from_rgb(15, 23, 42)),
+            );
+        });
+
+        ui.add_space(2.0);
+
+        // 步频图主画布
+        let canvas_h = 160.0f32;
+        let (response, painter) = ui.allocate_painter(
+            Vec2::new(ui.available_width().max(280.0), canvas_h),
+            egui::Sense::hover(),
+        );
+        let canvas = response.rect;
+
+        let pad_left = 50.0f32;
+        let pad_right = 16.0f32;
+        let pad_top = 14.0f32;
+        let pad_bottom = 22.0f32;
+
+        let plot_rect = Rect::from_min_max(
+            Pos2::new(canvas.left() + pad_left, canvas.top() + pad_top),
+            Pos2::new(canvas.right() - pad_right, canvas.bottom() - pad_bottom),
+        );
+
+        // 背景
+        painter.rect_filled(
+            canvas,
+            egui::Rounding::same(4.0),
+            Color32::from_rgb(248, 250, 252),
+        );
+        painter.rect_stroke(
+            canvas,
+            egui::Rounding::same(4.0),
+            Stroke::new(1.0_f32, Color32::from_rgb(226, 232, 240)),
+        );
+
+        // Y 轴范围：步频为正向轴（上方数值大，如 210；下方数值小，如 140/150）
+        let y_bot = 140.0f64;
+        let y_top = 210.0f64;
+        let y_span = (y_top - y_bot).max(10.0);
+
+        let to_plot_y = |cad: f64| -> f32 {
+            let ratio = ((cad - y_bot) / y_span).clamp(0.0, 1.0) as f32;
+            plot_rect.bottom() - ratio * plot_rect.height()
+        };
+
+        let dur_f = preview.total_dur_s.max(1) as f32;
+        let to_plot_x = |t_sec: f64| -> f32 {
+            let ratio = (t_sec as f32 / dur_f).clamp(0.0, 1.0);
+            plot_rect.left() + ratio * plot_rect.width()
+        };
+
+        // 绘制 Y 轴水平辅助刻度线（如 150, 165, 180, 195, 210）
+        for tick_val in [150, 165, 180, 195, 210] {
+            let yy = to_plot_y(tick_val as f64);
+            painter.line_segment(
+                [
+                    Pos2::new(plot_rect.left(), yy),
+                    Pos2::new(plot_rect.right(), yy),
+                ],
+                Stroke::new(1.0_f32, Color32::from_rgb(235, 238, 242)),
+            );
+            painter.text(
+                Pos2::new(plot_rect.left() - 6.0, yy),
+                egui::Align2::RIGHT_CENTER,
+                format!("{tick_val}"),
+                egui::FontId::proportional(11.0),
+                Color32::from_rgb(148, 163, 184),
+            );
+        }
+
+        // 绘制平均步频基准线（暖珊瑚橙虚线）
+        let avg_y = to_plot_y(preview.avg_cadence);
+        painter.line_segment(
+            [
+                Pos2::new(plot_rect.left(), avg_y),
+                Pos2::new(plot_rect.right(), avg_y),
+            ],
+            Stroke::new(1.2_f32, Color32::from_rgb(234, 88, 12)),
+        );
+        painter.text(
+            Pos2::new(plot_rect.right() - 2.0, avg_y - 8.0),
+            egui::Align2::RIGHT_BOTTOM,
+            format!("均频 {:.0}", preview.avg_cadence),
+            egui::FontId::proportional(10.5),
+            Color32::from_rgb(194, 65, 12),
+        );
+
+        // 绘制公里竖向虚线标记
+        let total_km = preview.total_dis_m / 1000.0;
+        for km_i in 1..=(total_km.floor() as i64) {
+            let km_target = km_i as f64 * 1000.0;
+            if let Some(w) = preview.windows.iter().find(|w| w.cum_dist_m >= km_target) {
+                let xx = to_plot_x(w.time_s);
+                painter.line_segment(
+                    [
+                        Pos2::new(xx, plot_rect.top()),
+                        Pos2::new(xx, plot_rect.bottom()),
+                    ],
+                    Stroke::new(1.0_f32, Color32::from_rgb(203, 213, 225)),
+                );
+                painter.text(
+                    Pos2::new(xx, plot_rect.bottom() + 4.0),
+                    egui::Align2::CENTER_TOP,
+                    format!("{km_i}km"),
+                    egui::FontId::proportional(10.5),
+                    Color32::from_rgb(100, 116, 139),
+                );
+            }
+        }
+
+        // 绘制底部首尾时间刻度
+        painter.text(
+            Pos2::new(plot_rect.left(), plot_rect.bottom() + 4.0),
+            egui::Align2::LEFT_TOP,
+            "00:00",
+            egui::FontId::proportional(10.5),
+            Color32::from_rgb(148, 163, 184),
+        );
+        painter.text(
+            Pos2::new(plot_rect.right(), plot_rect.bottom() + 4.0),
+            egui::Align2::RIGHT_TOP,
+            fmt_time_val(preview.total_dur_s),
+            egui::FontId::proportional(10.5),
+            Color32::from_rgb(148, 163, 184),
+        );
+
+        // 生成点列并绘制下方半透明填充多边形（暖橙色珊瑚渐变）
+        let pts: Vec<Pos2> = preview
+            .windows
+            .iter()
+            .map(|w| Pos2::new(to_plot_x(w.time_s), to_plot_y(w.cadence)))
+            .collect();
+
+        if pts.len() >= 2 {
+            let mut fill_polygon = Vec::with_capacity(pts.len() + 2);
+            fill_polygon.push(Pos2::new(pts[0].x, plot_rect.bottom()));
+            fill_polygon.extend(pts.iter().copied());
+            fill_polygon.push(Pos2::new(pts.last().unwrap().x, plot_rect.bottom()));
+
+            let fill_mesh = egui::epaint::Mesh {
+                indices: (1..fill_polygon.len() as u32 - 1)
+                    .flat_map(|i| vec![0, i, i + 1])
+                    .collect(),
+                vertices: fill_polygon
+                    .iter()
+                    .map(|&p| egui::epaint::Vertex {
+                        pos: p,
+                        uv: egui::epaint::WHITE_UV,
+                        color: Color32::from_rgba_unmultiplied(249, 115, 22, 35),
+                    })
+                    .collect(),
+                texture_id: egui::TextureId::default(),
+            };
+            painter.add(fill_mesh);
+
+            // 绘制主步频折线（动感橙色）
+            painter.add(egui::Shape::line(
+                pts.clone(),
+                Stroke::new(2.2_f32, Color32::from_rgb(249, 115, 22)),
+            ));
+        }
+
+        // 交互光标悬停拾取
+        if let Some(hover_pos) = response.hover_pos() {
+            if plot_rect.contains(hover_pos) {
+                let hover_ratio = ((hover_pos.x - plot_rect.left()) / plot_rect.width()).clamp(0.0, 1.0);
+                let hover_t = hover_ratio as f64 * preview.total_dur_s as f64;
+
+                if let Some(best_w) = preview
+                    .windows
+                    .iter()
+                    .min_by(|a, b| (a.time_s - hover_t).abs().partial_cmp(&(b.time_s - hover_t).abs()).unwrap())
+                {
+                    let h_x = to_plot_x(best_w.time_s);
+                    let h_y = to_plot_y(best_w.cadence);
+
+                    painter.line_segment(
+                        [
+                            Pos2::new(h_x, plot_rect.top()),
+                            Pos2::new(h_x, plot_rect.bottom()),
+                        ],
+                        Stroke::new(1.0_f32, Color32::from_rgb(71, 85, 105)),
+                    );
+
+                    painter.circle_filled(Pos2::new(h_x, h_y), 4.5, Color32::from_rgb(249, 115, 22));
+                    painter.circle_stroke(
+                        Pos2::new(h_x, h_y),
+                        4.5,
+                        Stroke::new(1.5_f32, Color32::WHITE),
+                    );
+
+                    let hud_text = format!(
+                        "⏱ {} · 🏃 {:.0} spm · 步幅 {:.0} cm · ⚡ {}/km · 📏 {:.2} km",
+                        fmt_time_val(best_w.time_s.round() as i64),
+                        best_w.cadence,
+                        best_w.stride_cm,
+                        fmt_pace_val(best_w.pace_s_per_km),
+                        best_w.cum_dist_m / 1000.0,
+                    );
+
+                    let hud_x = if h_x > plot_rect.center().x {
+                        h_x - 12.0
+                    } else {
+                        h_x + 12.0
+                    };
+                    let align = if h_x > plot_rect.center().x {
+                        egui::Align2::RIGHT_TOP
+                    } else {
+                        egui::Align2::LEFT_TOP
+                    };
+
+                    painter.text(
+                        Pos2::new(hud_x, plot_rect.top() + 6.0),
+                        align,
+                        hud_text,
+                        egui::FontId::proportional(11.5),
+                        Color32::from_rgb(15, 23, 42),
+                    );
+                }
+            }
+        }
+
+        // 底部每公里分段步频小卡片
+        ui.add_space(2.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.colored_label(theme::plain(), "公里步频：");
+            for lap in &preview.laps {
+                let badge_text = if lap.is_full {
+                    format!("第 {} 公里: {:.0} spm", lap.lap_num, lap.cadence)
+                } else {
+                    format!("余 {:.0}m: {:.0} spm", lap.dist_m, lap.cadence)
+                };
+                let tooltip = format!(
+                    "配速: {} · 步幅: {:.0} cm · 用时: {}",
+                    fmt_pace_val(lap.pace_s_per_km),
+                    lap.stride_cm,
+                    fmt_time_val(lap.dur_s),
+                );
+                ui.label(
+                    egui::RichText::new(badge_text)
+                        .size(11.5)
+                        .color(Color32::from_rgb(194, 65, 12)),
+                )
+                .on_hover_text(tooltip);
+                ui.add_space(4.0);
+            }
+        });
+    });
+}
+
+/// 绘制预演看板（支持在配速图、步频图、两图并列之间一键切换）
+pub fn draw_preview_cards(ui: &mut egui::Ui, preview: &PacePreview, mode: &mut ChartViewMode) {
+    ui.horizontal(|ui| {
+        ui.label("预演图表：");
+        for m in [
+            ChartViewMode::Pace,
+            ChartViewMode::Cadence,
+            ChartViewMode::Both,
+        ] {
+            ui.selectable_value(mode, m, m.label());
+        }
+    });
+    ui.add_space(2.0);
+
+    match *mode {
+        ChartViewMode::Pace => {
+            draw_pace_preview_card(ui, preview);
+        }
+        ChartViewMode::Cadence => {
+            draw_cadence_preview_card(ui, preview);
+        }
+        ChartViewMode::Both => {
+            draw_pace_preview_card(ui, preview);
+            ui.add_space(6.0);
+            draw_cadence_preview_card(ui, preview);
+        }
+    }
 }
 
 #[cfg(test)]

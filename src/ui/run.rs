@@ -101,6 +101,8 @@ pub struct RunPage {
     pub pace_preview: Option<super::pace_chart::PacePreview>,
     /// 是否展开配速折线图预演卡片
     pub show_pace_chart: bool,
+    /// 预演图表展示模式（配速 / 步频 / 并列展示）
+    pub chart_view_mode: super::pace_chart::ChartViewMode,
     /// 是否允许中途缓行喘息降速
     pub allow_mid_slowdown: bool,
 }
@@ -557,10 +559,14 @@ impl App {
             }
         });
 
-        // 渲染配速折线图预演（含 10 秒时间窗微波、均速基准线、交互光标 HUD 与公里分段）
+        // 渲染配速/步频折线图预演（含 10 秒时间窗微波、均值基准线、交互光标 HUD 与分公里卡片）
         if self.run_page.show_pace_chart {
             if let Some(preview) = &self.run_page.pace_preview {
-                super::pace_chart::draw_pace_preview_card(ui, preview);
+                super::pace_chart::draw_preview_cards(
+                    ui,
+                    preview,
+                    &mut self.run_page.chart_view_mode,
+                );
                 ui.add_space(4.0);
             }
         }
