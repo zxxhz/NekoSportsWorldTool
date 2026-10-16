@@ -507,6 +507,12 @@ mod tests {
             "步频缺乏真人起伏感（过于平直）: min={} max={}",
             min_cad, max_cad
         );
+        // 验证一开始步频慢、随后爬升到均值的热身特性
+        assert!(
+            p.windows[0].cadence < p.windows[6].cadence,
+            "起步前几秒应为热身慢步频: start={} cruise={}",
+            p.windows[0].cadence, p.windows[6].cadence
+        );
 
         // 验证开启中途喘息降速：中段配速有自然的平缓波谷（降速槽），且绝不越出 10'00" 标红
         let p_slow = build_pace_preview(2350.0, 1020, 42, true);

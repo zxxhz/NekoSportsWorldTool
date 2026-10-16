@@ -1062,7 +1062,7 @@ fn build_track_from_route(
         })
         .collect();
     let cadence_seed = seed.wrapping_add(0xC6A4_A793_5BD1_E995);
-    let cadences = ou_cadence_series(&targets, &dts, cadence_seed, 0.25, 2.0, 160.0, 205.0);
+    let _cadences = ou_cadence_series(&targets, &dts, cadence_seed, 0.25, 2.0, 160.0, 205.0);
 
     // GPS 抖动：AR(1) 相关漂移 + 高斯测量噪声（SDF 逐点放大）
     let mut jitter = GpsJitter::new(0.72, 0.75, 0.3);
@@ -1126,12 +1126,15 @@ fn build_track_from_route(
         dist_acc += d_step;
         let (lat, lng) = to_bd(px, py, c_lat, c_lng);
         alt += 0.04 * (82.0 - alt) + rng.gauss(0.0, alt_sigma);
-        // 生物力学联动：增加宏观生理节律波，有快有慢：172~192 spm
         let v_now = speeds[i];
-        let _km_done = (t_acc / dur_f) * dist / 1000.0;
-        let macro_wave = 5.0 * (std::f64::consts::TAU * t_acc / 190.0 + phi1).sin()
-            + 3.0 * (std::f64::consts::TAU * t_acc / 115.0 + phi2).cos();
-        let cad_target = (cadences[i] + macro_wave).clamp(168.0, 198.0);
+        // 起步慢、前 45 秒平滑爬升至均值，随后自然波动的步频节律
+        let warmup_u = (t_acc / 45.0).clamp(0.0, 1.0);
+        let warmup_s = 3.0 * warmup_u * warmup_u - 2.0 * warmup_u * warmup_u * warmup_u;
+        let warmup_delta = -20.0 * (1.0 - warmup_s);
+
+        let macro_wave = 5.0 * (std::f64::consts::TAU * t_acc / 170.0 + phi1).sin()
+            + 3.5 * (std::f64::consts::TAU * t_acc / 95.0 + phi2).cos();
+        let cad_target = (183.0 + warmup_delta + macro_wave + rng.gauss(0.0, 3.2)).clamp(152.0, 198.0);
         let stride = (v_now * 60.0 / cad_target).clamp(0.32, 1.25);
         let cad = v_now * 60.0 / stride;
         steps_acc += cad / 60.0 * dt;

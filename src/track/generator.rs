@@ -128,20 +128,26 @@ pub fn smooth_ten_sec_windows(
         }
     }
 
-    // 联动计算步频步数：真实学生跑步平均步频约 182~185 spm，
-    // 拥有自然的生理起伏波动（在 168~196 spm 之间生动变化，拒绝死板平直线）
+    // 联动计算步频步数：一开始步频慢（前 45 秒从 ~160-168 spm 平滑爬升至均值），
+    // 达到均值（~183 spm）后在 168~196 spm 之间生动自然起伏波动
     let mut steps_vals: Vec<f64> = Vec::with_capacity(m);
     for i in 0..m {
         let win_t = windows_speed[i].time as f64;
         let mid_t = (i as f64 * 10.0 + win_t * 0.5).min(dur_f);
         let d = vals[i];
         let v = d / win_t.max(0.1);
+
+        // 起步热身：前 45 秒从较慢步频平滑爬升至巡航均值
+        let warmup_u = (mid_t / 45.0).clamp(0.0, 1.0);
+        let warmup_s = 3.0 * warmup_u * warmup_u - 2.0 * warmup_u * warmup_u * warmup_u;
+        let warmup_delta = -20.0 * (1.0 - warmup_s);
+
         let cad_wave = 5.0 * (std::f64::consts::TAU * mid_t / 170.0 + phi1).sin()
             + 3.5 * (std::f64::consts::TAU * mid_t / 95.0 + phi2).cos();
         // 增加真人真实的步频随机离散度（标准差 3.2 spm，使每个 10 秒窗口步数有自然浮动）
-        let cad = (182.0 + 2.5 * (v - base_v) + cad_wave + rng.gauss(0.0, 3.2)).clamp(168.0, 198.0);
+        let cad = (183.0 + warmup_delta + 2.5 * (v - base_v) + cad_wave + rng.gauss(0.0, 3.2)).clamp(152.0, 198.0);
         let st = (cad / 60.0 * win_t).round().max(1.0);
-        steps_vals.push(st.clamp((win_t * 2.5).round().max(1.0), (win_t * 4.2).round().max(1.0)));
+        steps_vals.push(st.clamp((win_t * 2.2).round().max(1.0), (win_t * 4.2).round().max(1.0)));
     }
 
     // 回写到原数组
@@ -361,17 +367,21 @@ fn build_from_ring(
         alt += 0.04 * (82.0 - alt) + rng.gauss(0.0, alt_sigma);
         // 生物力学高步频小步幅联动（加入宏观生理节律波，有快有慢：172~192 spm）
         let v_now = speeds[i];
-        let km_done = (t_acc / dur_f) * dist / 1000.0;
-        let fat = route_planner::fatigue_from_km(km_done);
-        let gait = route_planner::gait(v_now, fat);
-        // 宏观步频节律波（周期约 3.1 分钟与 1.9 分钟，与配速起伏同频共振，有快有慢：172~192 spm）
-        let macro_wave = 5.0 * (std::f64::consts::TAU * t_acc / 190.0 + phi1).sin()
-            + 3.0 * (std::f64::consts::TAU * t_acc / 115.0 + phi2).cos();
+        let _km_done = (t_acc / dur_f) * dist / 1000.0;
+        let _fat = route_planner::fatigue_from_km(_km_done);
+        let _gait = route_planner::gait(v_now, _fat);
+        // 起步慢、前 45 秒平滑爬升至均值，随后自然波动的步频节律
+        let warmup_u = (t_acc / 45.0).clamp(0.0, 1.0);
+        let warmup_s = 3.0 * warmup_u * warmup_u - 2.0 * warmup_u * warmup_u * warmup_u;
+        let warmup_delta = -20.0 * (1.0 - warmup_s);
+
+        let macro_wave = 5.0 * (std::f64::consts::TAU * t_acc / 170.0 + phi1).sin()
+            + 3.5 * (std::f64::consts::TAU * t_acc / 95.0 + phi2).cos();
         let u_artifact = rng.random();
-        let cad = if u_artifact < 0.010 {
-            rng.uniform(230.0, 290.0) // 模拟口袋晃动瞬时峰值
+        let cad = if u_artifact < 0.008 {
+            rng.uniform(215.0, 255.0) // 口袋轻微晃动瞬时小尖峰
         } else {
-            (gait.cadence + macro_wave + rng.gauss(0.0, 1.2)).clamp(168.0, 198.0)
+            (183.0 + warmup_delta + macro_wave + rng.gauss(0.0, 3.2)).clamp(152.0, 198.0)
         };
         let stride = (v_now * 60.0 / cad).clamp(0.32, 1.25);
         let cad = v_now * 60.0 / stride;
