@@ -229,13 +229,14 @@ mod validation_tests {
             }
         }
 
-        // 3. 验证每个 10 秒时间窗位移严格在 17.50~41.00 米之间，绝不下坠跌破 10'00"（绝不标红！）
+        // 3. 验证每个 10 秒时间窗等效位移率严格在 17.50~41.00 米之间，绝不下坠跌破 10'00"（绝不标红！）
         assert!(!track.speedPerTenSec.is_empty(), "10秒配速窗不能为空");
         for win in &track.speedPerTenSec {
+            let equiv_10s = win.value / win.time as f64 * 10.0;
             assert!(
-                win.value >= 17.50 && win.value <= 41.00,
-                "10秒时间窗位移 {} m 跌出 17.50~41.00m 安全区间（配速会标红）",
-                win.value
+                equiv_10s >= 17.50 && equiv_10s <= 41.00,
+                "10秒时间窗位移率 {} m 跌出 17.50~41.00m 安全区间（配速会标红）",
+                equiv_10s
             );
         }
     }

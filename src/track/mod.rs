@@ -194,7 +194,7 @@ mod tests {
             for &(dist, dur) in &combos {
                 let t = build(dist, dur, seed, (38.9, 121.54), 1_788_958_186_123, &pts);
                 for (i, w) in t.speedPerTenSec.iter().enumerate() {
-                    let pace = 1000.0 / (w.value / 10.0); // 秒/km
+                    let pace = 1000.0 / (w.value / w.time as f64); // 秒/km
                     assert!(
                         (141.0..=600.0).contains(&pace),
                         "seed={seed} dist={dist} 窗{i} 配速 {}/km 越界",

@@ -482,7 +482,7 @@ mod tests {
         // 验证首公里比末公里快（自然体能前快后慢）
         assert!(p.laps[0].pace_s_per_km < p.laps[1].pace_s_per_km);
 
-        // 验证最后一个残余时间窗（1020s % 10 = 0，换一个非整10秒测试末尾无异常冲刺）
+        // 验证最后一个残余时间窗（1020s % 10 = 0，换一个非整10秒测试末尾无异常冲刺，且绝无 1800 步频暴飙）
         let p_odd = build_pace_preview(2350.0, 1023, 42, false);
         let last_w = p_odd.windows.last().unwrap();
         let prev_w = &p_odd.windows[p_odd.windows.len() - 2];
@@ -491,6 +491,21 @@ mod tests {
             (last_w.pace_s_per_km - prev_w.pace_s_per_km).abs() < 15.0,
             "末端残余窗口发生突兀加速: prev={} last={}",
             last_w.pace_s_per_km, prev_w.pace_s_per_km
+        );
+        // 验证末端残余窗口步频绝不暴飙到 1800（必须严格在 165~205 spm 范围内）
+        assert!(
+            last_w.cadence >= 165.0 && last_w.cadence <= 205.0,
+            "末端残余窗口步频异常暴飙: cadence={}",
+            last_w.cadence
+        );
+
+        // 验证步频具有生动的真人随机起伏性（非死板直线，极差在 8~30 spm 之间）
+        let min_cad = p.windows.iter().map(|w| w.cadence).fold(f64::INFINITY, f64::min);
+        let max_cad = p.windows.iter().map(|w| w.cadence).fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            max_cad - min_cad >= 8.0,
+            "步频缺乏真人起伏感（过于平直）: min={} max={}",
+            min_cad, max_cad
         );
 
         // 验证开启中途喘息降速：中段配速有自然的平缓波谷（降速槽），且绝不越出 10'00" 标红

@@ -128,18 +128,20 @@ pub fn smooth_ten_sec_windows(
         }
     }
 
-    // 联动计算步频步数：均值约 184 spm，与配速微波紧密共振（178~188 spm）
+    // 联动计算步频步数：真实学生跑步平均步频约 182~185 spm，
+    // 拥有自然的生理起伏波动（在 168~196 spm 之间生动变化，拒绝死板平直线）
     let mut steps_vals: Vec<f64> = Vec::with_capacity(m);
     for i in 0..m {
         let win_t = windows_speed[i].time as f64;
         let mid_t = (i as f64 * 10.0 + win_t * 0.5).min(dur_f);
         let d = vals[i];
         let v = d / win_t.max(0.1);
-        let cad_wave = 3.0 * (std::f64::consts::TAU * mid_t / 150.0 + phi1).sin()
-            + 1.8 * (std::f64::consts::TAU * mid_t / 90.0 + phi2).cos();
-        let cad = (182.0 + 1.5 * (v - base_v) + cad_wave + rng.gauss(0.0, 0.4)).clamp(176.0, 192.0);
-        let st = (cad / 60.0 * win_t).round();
-        steps_vals.push(st.clamp((win_t * 2.5).round(), (win_t * 4.2).round()));
+        let cad_wave = 5.0 * (std::f64::consts::TAU * mid_t / 170.0 + phi1).sin()
+            + 3.5 * (std::f64::consts::TAU * mid_t / 95.0 + phi2).cos();
+        // 增加真人真实的步频随机离散度（标准差 3.2 spm，使每个 10 秒窗口步数有自然浮动）
+        let cad = (182.0 + 2.5 * (v - base_v) + cad_wave + rng.gauss(0.0, 3.2)).clamp(168.0, 198.0);
+        let st = (cad / 60.0 * win_t).round().max(1.0);
+        steps_vals.push(st.clamp((win_t * 2.5).round().max(1.0), (win_t * 4.2).round().max(1.0)));
     }
 
     // 回写到原数组
@@ -446,11 +448,11 @@ fn build_from_ring(
         });
     }
     if ten_t > 0.5 {
-        let k = 10.0 / ten_t;
-        let out_d = (ten_d * k).clamp(17.50, 41.00);
-        let out_st = (ten_st * k).clamp(25.0, 45.0);
-        ten_speed.push(TenWindow { time: 10, value: round_to(out_d, 2) });
-        ten_steps.push(TenWindow { time: 10, value: round_to(out_st, 0) });
+        let last_time = 1.max(ten_t.round() as i64);
+        let out_d = (speeds.last().copied().unwrap_or(base) * ten_t).clamp(1.75 * ten_t, 4.10 * ten_t);
+        let out_st = (180.0 / 60.0 * ten_t).round().max(1.0);
+        ten_speed.push(TenWindow { time: last_time, value: round_to(out_d, 2) });
+        ten_steps.push(TenWindow { time: last_time, value: round_to(out_st, 0) });
     }
     // 消除离散时间窗锯齿与大幅跳变，生成平稳连续、符合自然生理律动的 10 秒配速曲线
     let allow_mid_slowdown = crate::api::model::load_config().allow_mid_slowdown;

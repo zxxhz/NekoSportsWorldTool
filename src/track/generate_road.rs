@@ -1211,15 +1211,15 @@ fn build_track_from_route(
         });
     }
     if ten_t > 0.5 {
-        let k = 10.0 / ten_t;
-        let out_d = (ten_d * k).clamp(17.50, 41.00);
-        let out_st = (ten_st * k).clamp(25.0, 45.0);
+        let last_time = 1.max(ten_t.round() as i64);
+        let out_d = (speeds.last().copied().unwrap_or(base_v) * ten_t).clamp(1.75 * ten_t, 4.10 * ten_t);
+        let out_st = (180.0 / 60.0 * ten_t).round().max(1.0);
         ten_speed.push(TenWindow {
-            time: 10,
+            time: last_time,
             value: round_to(out_d, 2),
         });
         ten_steps.push(TenWindow {
-            time: 10,
+            time: last_time,
             value: round_to(out_st, 0),
         });
     }
