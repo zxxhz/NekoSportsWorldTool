@@ -1084,6 +1084,7 @@ fn build_track_from_route(
 
     let phi1 = ((seed & 0xFFFF) as f64 / 65535.0) * std::f64::consts::TAU;
     let phi2 = (((seed >> 16) & 0xFFFF) as f64 / 65535.0) * std::f64::consts::TAU;
+    let allow_mid_slowdown = crate::api::model::load_config().allow_mid_slowdown;
 
     for i in 0..n {
         let dt = dts[i];
@@ -1134,8 +1135,21 @@ fn build_track_from_route(
 
         let macro_wave = 5.0 * (std::f64::consts::TAU * t_acc / 170.0 + phi1).sin()
             + 3.5 * (std::f64::consts::TAU * t_acc / 95.0 + phi2).cos();
-        let cad_target = (183.0 + warmup_delta + macro_wave + rng.gauss(0.0, 3.2)).clamp(152.0, 198.0);
-        let stride = (v_now * 60.0 / cad_target).clamp(0.32, 1.25);
+        let u_prog = (t_acc / dur_f).clamp(0.0, 1.0);
+        let u_mid: f64 = (u_prog - 0.58) / 0.055;
+        let walk_dip = if allow_mid_slowdown && n >= 20 && u_mid.abs() < 2.5 {
+            (-0.5f64 * u_mid * u_mid).exp()
+        } else {
+            0.0
+        };
+        let run_cad = (183.0 + warmup_delta + macro_wave + rng.gauss(0.0, 3.2)).clamp(152.0, 198.0);
+        let walk_cad = (118.0 + rng.gauss(0.0, 3.0)).clamp(108.0, 128.0);
+        let cad = if walk_dip > 0.05 {
+            run_cad * (1.0 - 0.85 * walk_dip) + walk_cad * (0.85 * walk_dip)
+        } else {
+            run_cad
+        };
+        let stride = (v_now * 60.0 / cad).clamp(0.32, 1.25);
         let cad = v_now * 60.0 / stride;
         steps_acc += cad / 60.0 * dt;
         let nxt = pos(s + 2.0);
@@ -1147,8 +1161,8 @@ fn build_track_from_route(
         // 配合一阶 AR(1) 连续平滑，彻底消除梳子状高频尖峰与正反颠倒！
         let pace_min = 1000.0 / (avg_sp * 60.0);
         speed_drift = 0.82 * speed_drift + rng.gauss(0.0, 0.005);
-        let min_allowed_pace = (base_pace_s - 10.5) / 60.0;
-        let max_allowed_pace = (base_pace_s + 10.5) / 60.0;
+        let min_allowed_pace = if walk_dip > 0.05 { 4.0 } else { (base_pace_s - 10.5) / 60.0 };
+        let max_allowed_pace = if walk_dip > 0.05 { 9.8 } else { (base_pace_s + 10.5) / 60.0 };
         let point_pace = if i <= 1 {
             0.0
         } else {

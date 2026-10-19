@@ -541,8 +541,8 @@ impl App {
                 .on_hover_text("展开/收起本次跑步配速折线图与每公里分段预演");
             let mut slowdown = self.config.allow_mid_slowdown;
             if ui
-                .checkbox(&mut slowdown, "中途缓行休整")
-                .on_hover_text("模拟真实跑步在行程中段（约55%~60%处）停顿/放慢慢跑喘息20~30秒（平缓降至 9'10\"~9'30\"，安全绝不标红），折线图实时呈现波谷")
+                .checkbox(&mut slowdown, "中途走步歇息")
+                .on_hover_text("模拟真实跑步在行程中段（约55%~60%处）像走步一样歇息约30秒（配速放缓至 9'20\"~9'40\"，步频降至 110~125 spm，步幅缩短），随后平滑恢复开跑（安全不标红）")
                 .changed()
             {
                 self.config.allow_mid_slowdown = slowdown;
@@ -1982,11 +1982,12 @@ mod tests {
         assert!(!prev2.laps.is_empty());
         let prev2_max = prev2.max_pace_s;
 
-        // 验证开启中途喘息缓行降速：折线图自动呈现安全的缓行降速谷底
+        // 验证开启中途走步歇息：折线图自动呈现安全的走步降速谷底与步频降低
         p.allow_mid_slowdown = true;
         p.regen_plan();
-        let prev_slow_max = p.pace_preview.as_ref().unwrap().max_pace_s;
-        assert!(prev_slow_max <= 600.0, "中途缓行降速绝不标红超标");
-        assert!(prev_slow_max > prev2_max, "开启中途缓行后最大配速应深于关闭状态");
+        let prev_slow = p.pace_preview.as_ref().unwrap();
+        assert!(prev_slow.max_pace_s <= 600.0, "中途走步降速绝不标红超标");
+        assert!(prev_slow.max_pace_s > prev2_max, "开启中途走步后最大配速应深于关闭状态");
+        assert!(prev_slow.min_cadence <= 130.0, "走步时步频应降低到走步区间 (<=130 spm)");
     }
 }

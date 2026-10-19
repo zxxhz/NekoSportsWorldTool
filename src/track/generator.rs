@@ -62,6 +62,7 @@ pub fn smooth_ten_sec_windows(
     let phi2 = (((seed >> 16) & 0xFFFF) as f64 / 65535.0) * std::f64::consts::TAU;
 
     let mut speeds: Vec<f64> = Vec::with_capacity(m);
+    let mut walk_dips: Vec<f64> = vec![0.0; m];
     let mut drift_s = 0.0f64;
 
     for i in 0..m {
@@ -77,14 +78,15 @@ pub fn smooth_ten_sec_windows(
         drift_s = 0.75 * drift_s + rng.gauss(0.0, 0.35);
         let mut delta_s = (trend_s + wave_s + drift_s).clamp(-10.0, 10.0);
 
-        // 若开启中途喘息/缓行设置：在行程 50%~65% 之间插入一次自然的微降速槽
+        // 若开启中途走步歇息设置：在行程 52%~64% 处（约中段）插入一次平滑自然的走步休整（配速放缓至 9'20"~9'40"，安全不标红）
         if allow_mid_slowdown && m >= 8 {
-            let u_mid = (u - 0.58) / 0.08;
-            if u_mid.abs() < 2.0 {
+            let u_mid = (u - 0.58) / 0.055;
+            if u_mid.abs() < 2.5 {
                 let dip = (-0.5 * u_mid * u_mid).exp();
-                let slow_pace_s = (base_pace_s * 1.25).min(560.0); // 约 9'10" 慢跑喘息
+                walk_dips[i] = dip;
+                let walk_pace_s = 568.0; // 约 9'28" 走步慢行（严格限制在 10'00" 标红线以内）
                 let target_p = base_pace_s + delta_s;
-                let blended_p = target_p * (1.0 - 0.85 * dip) + slow_pace_s * (0.85 * dip);
+                let blended_p = target_p * (1.0 - 0.90 * dip) + walk_pace_s * (0.90 * dip);
                 delta_s = blended_p - base_pace_s;
             }
         }
@@ -144,10 +146,16 @@ pub fn smooth_ten_sec_windows(
 
         let cad_wave = 5.0 * (std::f64::consts::TAU * mid_t / 170.0 + phi1).sin()
             + 3.5 * (std::f64::consts::TAU * mid_t / 95.0 + phi2).cos();
-        // 增加真人真实的步频随机离散度（标准差 3.2 spm，使每个 10 秒窗口步数有自然浮动）
-        let cad = (183.0 + warmup_delta + 2.5 * (v - base_v) + cad_wave + rng.gauss(0.0, 3.2)).clamp(152.0, 198.0);
+        let run_cad = (183.0 + warmup_delta + 2.5 * (v - base_v) + cad_wave + rng.gauss(0.0, 3.2)).clamp(152.0, 198.0);
+        let walk_cad = (118.0 + rng.gauss(0.0, 3.0)).clamp(108.0, 128.0);
+        let dip = walk_dips[i];
+        let cad = if dip > 0.05 {
+            run_cad * (1.0 - 0.85 * dip) + walk_cad * (0.85 * dip)
+        } else {
+            run_cad
+        };
         let st = (cad / 60.0 * win_t).round().max(1.0);
-        steps_vals.push(st.clamp((win_t * 2.2).round().max(1.0), (win_t * 4.2).round().max(1.0)));
+        steps_vals.push(st.clamp((win_t * 1.6).round().max(1.0), (win_t * 4.2).round().max(1.0)));
     }
 
     // 回写到原数组
@@ -268,6 +276,7 @@ fn build_from_ring(
     let phi1 = ((seed & 0xFFFF) as f64 / 65535.0) * std::f64::consts::TAU;
     let phi2 = (((seed >> 16) & 0xFFFF) as f64 / 65535.0) * std::f64::consts::TAU;
 
+    let allow_mid_slowdown = crate::api::model::load_config().allow_mid_slowdown;
     let mut w = Vec::with_capacity(n);
     let mut drift_s = 0.0f64;
     for i in 0..n {
@@ -279,9 +288,22 @@ fn build_from_ring(
         let wave_s = 3.8 * (std::f64::consts::TAU * tt / 150.0 + phi1).sin()
             + 2.2 * (std::f64::consts::TAU * tt / 90.0 + phi2).cos();
         drift_s = 0.75 * drift_s + rng.gauss(0.0, 0.35);
-        let delta_s = (trend_s + wave_s + drift_s).clamp(-10.0, 10.0);
+        let mut delta_s = (trend_s + wave_s + drift_s).clamp(-10.0, 10.0);
+
+        // 若开启中途走步歇息：在行程 52%~64% 处平滑插入走步放慢（降至 9'20"~9'40"，安全不标红）
+        if allow_mid_slowdown && n >= 20 {
+            let u_mid = (u - 0.58) / 0.055;
+            if u_mid.abs() < 2.5 {
+                let dip = (-0.5 * u_mid * u_mid).exp();
+                let walk_pace_s = 568.0;
+                let target_p = base_pace_s + delta_s;
+                let blended_p = target_p * (1.0 - 0.90 * dip) + walk_pace_s * (0.90 * dip);
+                delta_s = blended_p - base_pace_s;
+            }
+        }
+
         let cur_pace_s = (base_pace_s + delta_s).clamp(240.0, 600.0);
-        let cur_v = (1000.0 / cur_pace_s).clamp(local_floor, local_ceil);
+        let cur_v = (1000.0 / cur_pace_s).clamp(SPEED_FLOOR, SPEED_CEIL);
         w.push(cur_v);
     }
 
@@ -378,10 +400,21 @@ fn build_from_ring(
         let macro_wave = 5.0 * (std::f64::consts::TAU * t_acc / 170.0 + phi1).sin()
             + 3.5 * (std::f64::consts::TAU * t_acc / 95.0 + phi2).cos();
         let u_artifact = rng.random();
-        let cad = if u_artifact < 0.008 {
+        let u_prog = (t_acc / dur_f).clamp(0.0, 1.0);
+        let u_mid: f64 = (u_prog - 0.58) / 0.055;
+        let walk_dip = if allow_mid_slowdown && n >= 20 && u_mid.abs() < 2.5 {
+            (-0.5f64 * u_mid * u_mid).exp()
+        } else {
+            0.0
+        };
+        let run_cad = (183.0 + warmup_delta + macro_wave + rng.gauss(0.0, 3.2)).clamp(152.0, 198.0);
+        let walk_cad = (118.0 + rng.gauss(0.0, 3.0)).clamp(108.0, 128.0);
+        let cad = if walk_dip > 0.05 {
+            run_cad * (1.0 - 0.85 * walk_dip) + walk_cad * (0.85 * walk_dip)
+        } else if u_artifact < 0.008 {
             rng.uniform(215.0, 255.0) // 口袋轻微晃动瞬时小尖峰
         } else {
-            (183.0 + warmup_delta + macro_wave + rng.gauss(0.0, 3.2)).clamp(152.0, 198.0)
+            run_cad
         };
         let stride = (v_now * 60.0 / cad).clamp(0.32, 1.25);
         let cad = v_now * 60.0 / stride;
@@ -395,8 +428,8 @@ fn build_from_ring(
         // 配合一阶 AR(1) 连续平滑，彻底消除梳子状高频尖峰与正反颠倒！
         let pace_min = 1000.0 / (avg_sp * 60.0);
         speed_drift = 0.82 * speed_drift + rng.gauss(0.0, 0.005);
-        let min_allowed_pace = (base_pace_s - 10.5) / 60.0;
-        let max_allowed_pace = (base_pace_s + 10.5) / 60.0;
+        let min_allowed_pace = if walk_dip > 0.05 { 4.0 } else { (base_pace_s - 10.5) / 60.0 };
+        let max_allowed_pace = if walk_dip > 0.05 { 9.8 } else { (base_pace_s + 10.5) / 60.0 };
         let point_pace = if i <= 1 {
             0.0
         } else {

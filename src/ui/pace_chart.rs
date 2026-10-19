@@ -841,9 +841,14 @@ mod tests {
             p.windows[0].cadence, p.windows[6].cadence
         );
 
-        // 验证开启中途喘息降速：中段配速有自然的平缓波谷（降速槽），且绝不越出 10'00" 标红
+        // 验证开启中途走步歇息：中段配速放缓且步频明显降至走步区间（110~130 spm），绝不越出 10'00" 标红
         let p_slow = build_pace_preview(2350.0, 1020, 42, true);
         assert!(p_slow.max_pace_s <= 600.0, "中途降速绝不标红超标");
         assert!(p_slow.max_pace_s > p.max_pace_s, "开启中途缓行后应有更深入的缓跑喘息段");
+        assert!(
+            p_slow.min_cadence <= 130.0,
+            "走步歇息时步频应自然减至走步区间 (<=130 spm): min_cad={}",
+            p_slow.min_cadence
+        );
     }
 }
