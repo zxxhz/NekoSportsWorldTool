@@ -93,7 +93,7 @@ mod tests {
         );
         assert_eq!(track.totalTime, 1220);
         assert!(!track.locations.is_empty());
-        assert!([0, 7].contains(&track.locations[0].ptype));
+        assert_eq!(track.locations[0].ptype, 0);
         assert_eq!(track.locations[1].ptype, 5);
         assert_eq!(track.locations.last().unwrap().ptype, 6);
         // 步数为正
@@ -117,7 +117,7 @@ mod tests {
         let n = track.locations.len();
         assert!((200..320).contains(&n), "n={n}");
         // 哨兵：索引0 type∈{0,7}/totalTime=0/state=1；索引1 type=5 全零；末点 type=6
-        assert!([0, 7].contains(&track.locations[0].ptype));
+        assert_eq!(track.locations[0].ptype, 0);
         assert_eq!(track.locations[0].totalTime, 0);
         assert_eq!(track.locations[0].state, 1);
         assert_eq!(track.locations[1].ptype, 5);

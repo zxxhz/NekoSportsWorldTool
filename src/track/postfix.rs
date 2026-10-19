@@ -28,8 +28,11 @@ pub fn apply_post_fixes(locs: &mut [GenPoint], rng: &mut Rng, start_ms: i64) {
         }
     }
     if locs.len() > 2 {
-        // 起点哨兵（type=5→setStartPoint）：全零累计 + state=1
+        // 起点哨兵（type=5→setStartPoint）：全零累计 + state=1，坐标与首点严格重合，避免起跑点间产生假性零速灰线
+        let (p0_lat, p0_lng) = (locs[0].gLat, locs[0].gLng);
         let sp = &mut locs[1];
+        sp.gLat = p0_lat;
+        sp.gLng = p0_lng;
         sp.ptype = 5;
         sp.state = 1;
         sp.locType = 1;
@@ -58,12 +61,12 @@ pub fn apply_post_fixes(locs: &mut [GenPoint], rng: &mut Rng, start_ms: i64) {
             p2.speed = round_to(1000.0 / (next_sp * 60.0), 4);
         }
     }
-    // 首点 = 起点：totalTime=0、type∈{0,7}、速度/配速取首个非零真实点，消除突发跳变尖峰
+    // 首点 = 起点：totalTime=0、type=0（标准正常绿点，移除 7 规避部分机型起步灰段）、速度取首个非零真实点
     if !locs.is_empty() {
         locs[0].totalTime = 0;
         locs[0].validTime = 0;
         locs[0].state = 1;
-        locs[0].ptype = rng.choice(&[0, 0, 0, 7]);
+        locs[0].ptype = 0;
         locs[0].locType = 1;
         locs[0].radius = round_to(rng.uniform(1.5, 3.0), 2);
         for j in 1..locs.len() {

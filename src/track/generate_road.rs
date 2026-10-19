@@ -961,7 +961,7 @@ fn build_track_from_route(
     ref_bd: &[(f64, f64)],
     snap_bd: &[(f64, f64)],
     closed: bool,
-    snap_radius_m: f64,
+    _snap_radius_m: f64,
     net: &RoadGraph,
 ) -> Result<Track, String> {
     let mut rng = Rng::new(seed);
@@ -1220,7 +1220,7 @@ fn build_track_from_route(
             bdA: round_to(alt, 2),
             bdD: round_to(brg, 2),
             bdS: round_to(avg_sp, 4),
-            bdG: rng.choice(&[1, 1, 1, -1]),
+            bdG: 1, // 全程 GPS 强信号有效，绝不注入 -1 丢星状态码，防止 App 将路段渲染为灰色线
             count: rng.randint(20, 88),
             dtr: 0.0,
             state,
@@ -1276,9 +1276,8 @@ fn build_track_from_route(
 
     apply_post_fixes(&mut locs, &mut rng, start_ms);
 
-    // 点位吸附：自动路由模式 <40m 吸附；自定义规划模式仅在 <=15m 时吸附，不把路线未经过的点强行拉过来。
-    // 同时跳过哨兵点（i<=1 或末点），并确保吸附后不与前后相邻点发生坐标重合，杜绝原地静止被误判为暂停。
-    let snap_limit = snap_radius_m * snap_radius_m;
+    // 点位吸附策略优化：开环单程或远离路线时不强行拽动坐标（避免制造横向 15m 死折返被判定为异常漂移灰线），仅在极近距离（<=3.5m）做微幅贴合
+    let snap_limit = if !closed { 0.0 } else { 3.5 * 3.5 };
     for pl in snap_bd {
         let mut best_i = None;
         let mut best_d = 1e18f64;

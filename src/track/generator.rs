@@ -483,7 +483,7 @@ fn build_from_ring(
             bdA: round_to(alt, 2),
             bdD: round_to(brg, 2),
             bdS: round_to(avg_sp, 4),
-            bdG: rng.choice(&[1, 1, 1, -1]),
+            bdG: 1, // 全程 GPS 强信号有效，绝不注入 -1 丢星状态码，防止 App 将路段渲染为灰色线
             count: rng.randint(20, 88),
             dtr: 0.0,
             state,
@@ -536,10 +536,11 @@ fn build_from_ring(
 
     apply_post_fixes(&mut locs, &mut rng, start_ms);
 
-    // 点位吸附：经典模式 <40m 吸附；自定义规划模式（pin_start=true）仅在 <=15m 时吸附，
-    // 防止把用户未经过、距离路线二三十米外的打卡点强行拉过来算作已打卡。
-    // 同时跳过哨兵点（i<=1 或末点），并确保吸附后不与前后相邻点发生坐标重合，杜绝原地静止被误判为暂停。
-    let snap_limit = if pin_start { 15.0 * 15.0 } else { 40.0 * 40.0 };
+    // 点位吸附策略优化：
+    // - 自定义手绘/操场规划模式（pin_start=true）：不强行拽动坐标！路线在打卡点 20m 范围内即可达标，
+    //   彻底杜绝强行把点拉向道路旁 15 米造成尖锐折返三角刺被高德/App 判定为异常漂移灰线；
+    // - 经典自动拟合模式（pin_start=false）：在 8m 范围内做贴合，满足测试要求。
+    let snap_limit = if pin_start { 0.0 } else { 8.0 * 8.0 };
     for pl in points_bd {
         let mut best_i = None;
         let mut best_d = 1e18f64;
