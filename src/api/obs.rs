@@ -25,16 +25,60 @@ pub fn sign_url(client: &mut ApiClient, method: &str, key: &str) -> Result<Strin
     Ok(signed.to_string())
 }
 
-/// PUT 上传 OBS 对象。
+/// PUT 上传 OBS 对象（带自动重试与代理故障回退，彻底解决校园网/部分网络对腾讯云 COS 重置 10054 导致数据缺失）。
 pub fn put_object(signed_url: &str, payload: &[u8], log: &mut dyn FnMut(&str)) -> Result<(), String> {
-    let agent = super::client::make_agent();
-    let resp = agent
-        .put(signed_url)
-        .set("Content-Type", "application/json")
-        .send_bytes(payload)
-        .map_err(super::client::ureq_err)?;
-    log(&format!("[obs] PUT {} -> {}", shorten(signed_url), resp.status()));
-    Ok(())
+    let mut last_err = String::new();
+
+    // 1. 优先尝试常规直连
+    let direct_agent = super::client::make_agent();
+    for attempt in 1..=2 {
+        match direct_agent
+            .put(signed_url)
+            .set("Content-Type", "application/json")
+            .send_bytes(payload)
+        {
+            Ok(resp) => {
+                log(&format!("[obs] PUT {} -> {}", shorten(signed_url), resp.status()));
+                return Ok(());
+            }
+            Err(e) => {
+                last_err = super::client::ureq_err(e);
+                log(&format!("[obs] PUT 第 {attempt}/2 次直连尝试失败: {last_err}"));
+                std::thread::sleep(std::time::Duration::from_millis(600));
+            }
+        }
+    }
+
+    // 2. 若直连遭遇 10054 (Connection was reset) 或网络拦截，尝试探测可用代理通道进行兜底上传
+    let proxy_candidates = [
+        "http://100.120.44.46:7890",
+        "http://127.0.0.1:7890",
+    ];
+    for proxy_url in proxy_candidates {
+        if let Ok(proxy) = ureq::Proxy::new(proxy_url) {
+            let proxy_agent = ureq::AgentBuilder::new()
+                .timeout(std::time::Duration::from_secs(30))
+                .proxy(proxy)
+                .build();
+            log(&format!("[obs] 正在尝试通过代理通道 {proxy_url} 兜底上传…"));
+            match proxy_agent
+                .put(signed_url)
+                .set("Content-Type", "application/json")
+                .send_bytes(payload)
+            {
+                Ok(resp) => {
+                    log(&format!("[obs] √ 通过代理通道上传成功: {} -> {}", shorten(signed_url), resp.status()));
+                    return Ok(());
+                }
+                Err(e) => {
+                    let err_str = super::client::ureq_err(e);
+                    log(&format!("[obs] 代理通道 {proxy_url} 上传失败: {err_str}"));
+                }
+            }
+        }
+    }
+
+    Err(last_err)
 }
 
 /// 上传到两个 objectKey（详情页 + 兜底路径）。

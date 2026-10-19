@@ -438,7 +438,13 @@ pub fn run_full_flow(
     let obj = build_obs_object(&track_for_obs, result.rrid, &result.uuid, sess.uid, &pts);
     let payload = obj.to_string().into_bytes();
     let keys = obs_keys(&track_for_obs, result.rrid, &result.uuid);
-    let obs_ok = super::obs::upload_both_keys(client, &keys, &payload, log);
+    let mut obs_ok = super::obs::upload_both_keys(client, &keys, &payload, log);
+    if obs_ok < 2 {
+        log("⚠ [obs] 首次上传未完全成功，正在启动二次重试…");
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        let retry_ok = super::obs::upload_both_keys(client, &keys, &payload, log);
+        obs_ok = obs_ok.max(retry_ok);
+    }
     if obs_ok == 2 {
         log("√ [obs] 双 key 上传成功");
     } else {

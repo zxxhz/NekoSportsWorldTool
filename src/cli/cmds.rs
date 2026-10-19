@@ -20,6 +20,7 @@ pub fn dispatch(args: Vec<String>) -> i32 {
         "record-info" => cmd_record_info(&rest),
         "obs-get" => cmd_obs_get(&rest),
         "obs-sample" => cmd_obs_sample(&rest),
+        "obs-fix" => cmd_obs_fix(&rest),
         "ai-records" => cmd_ai_records(&rest),
         "ai-info" => cmd_ai_info(&rest),
         "semester" => cmd_semester(),
@@ -488,6 +489,69 @@ fn cmd_obs_sample(rest: &[&str]) -> i32 {
     .ok();
     println!("已保存 {out}");
     0
+}
+
+/// 为指定已提交但 OBS 上传失败的记录重新生成并补传 OBS 轨迹对象（救活 App 详情中的“暂无数据”）。
+fn cmd_obs_fix(rest: &[&str]) -> i32 {
+    let flags = parse_flags(rest);
+    let Some(rrid) = get(&flags, "rrid").and_then(|v| v.parse::<i64>().ok()) else {
+        eprintln!("用法: nekosportsworldtool obs-fix --rrid <记录ID>");
+        return 1;
+    };
+    let mut client = match make_client() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{e}");
+            return 1;
+        }
+    };
+    let mut log = |s: &str| println!("{s}");
+    println!("正在拉取记录 rrid={rrid} 的服务器详情…");
+    let detail = match crate::api::records::fetch_detail(&mut client, rrid) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("拉取记录详情失败: {e}");
+            return 1;
+        }
+    };
+    let uid = match client.login.as_ref().map(|s| s.uid) {
+        Some(u) => u,
+        None => {
+            eprintln!("请先登录");
+            return 1;
+        }
+    };
+    let dist = detail.total_dis;
+    let dur = detail.total_time;
+    let start_ms = detail.start_time;
+    let uuid = detail.uuid.clone();
+    println!("获取到记录：距离 {:.2}m, 时长 {}s, uuid={uuid}", dist, dur);
+
+    let anchor = client
+        .identity
+        .anchor_coordinate()
+        .unwrap_or_else(|_| crate::location::Coordinate::new(38.9, 121.54, 10.0).unwrap());
+    let pts = match crate::api::points::fetch_points(&mut client, anchor, &mut log) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("获取打卡点失败: {e}");
+            return 1;
+        }
+    };
+    let pts_bd = crate::api::points::points_bd(&pts);
+    let track = crate::track::generator::build(dist, dur, 42, (anchor.latitude, anchor.longitude), start_ms, &pts_bd);
+    let obj = crate::track::wire::build_obs_object(&track, rrid, &uuid, uid, &pts);
+    let payload = obj.to_string().into_bytes();
+    let keys = crate::track::wire::obs_keys(&track, rrid, &uuid);
+    println!("正在补传 OBS 云存储对象到两个 key…");
+    let ok = crate::api::obs::upload_both_keys(&mut client, &keys, &payload, &mut log);
+    if ok > 0 {
+        println!("√ 补传成功 ({ok}/2)！请刷新手机 App 查看跑步详情与配速折线图");
+        0
+    } else {
+        eprintln!("❌ 补传失败 ({ok}/2)，请检查网络连接");
+        1
+    }
 }
 
 /// 单条跑步记录原始详情。

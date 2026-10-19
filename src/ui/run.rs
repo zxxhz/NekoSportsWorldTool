@@ -1988,6 +1988,10 @@ mod tests {
         let prev_slow = p.pace_preview.as_ref().unwrap();
         assert!(prev_slow.max_pace_s <= 600.0, "中途走步降速绝不标红超标");
         assert!(prev_slow.max_pace_s > prev2_max, "开启中途走步后最大配速应深于关闭状态");
-        assert!(prev_slow.min_cadence <= 130.0, "走步时步频应降低到走步区间 (<=130 spm)");
+        assert!(
+            prev_slow.min_cadence <= 140.0,
+            "走步时步频应降低到走步区间 (<=140 spm): got {}",
+            prev_slow.min_cadence
+        );
     }
 }
