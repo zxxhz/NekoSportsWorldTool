@@ -3,8 +3,8 @@
 use super::about::FinishAction;
 use super::{
     App, PopupInfo, AI_DETAIL, AI_DONE, AI_LIST, AI_RECORDS, CHEAT, FENCE_DONE, IP, LOGIN_DONE,
-    POINTS_DONE, RANK, RECORDS, RUN_DETAIL, RUN_DONE, SEMESTER, UPDATE_CHK, UPDATE_DONE,
-    UPDATE_PROG, USER,
+    OBS_FIX_DONE, POINTS_DONE, RANK, RECORDS, RUN_DETAIL, RUN_DONE, SEMESTER, UPDATE_CHK,
+    UPDATE_DONE, UPDATE_PROG, USER,
 };
 use crate::api::model;
 use chrono::TimeZone;
@@ -74,6 +74,13 @@ impl App {
                 update_prog = Some(v.to_string());
             } else if let Some(v) = msg.strip_prefix(UPDATE_DONE) {
                 update_done = Some(v.to_string());
+            } else if let Some(v) = msg.strip_prefix(OBS_FIX_DONE) {
+                self.records_busy = false;
+                self.status = v.to_string();
+                self.popup = Some(PopupInfo {
+                    title: "覆盖补传结果".into(),
+                    lines: vec![v.to_string()],
+                });
             } else {
                 self.log.push(&msg);
             }

@@ -118,6 +118,7 @@ impl App {
     /// 详情独立页：返回 + 全部字段。
     fn draw_detail_view(&mut self, ui: &mut egui::Ui) {
         let rrid = self.records_page.detail_rrid.unwrap_or(0);
+        let mut do_reupload = false;
         ui.add_space(4.0);
         mobile::row(ui, |ui| {
             if ui.button("← 返回列表").clicked() {
@@ -131,7 +132,20 @@ impl App {
                     .strong()
                     .color(theme::accent()),
             );
+            if self.records_page.detail_raw.is_some() && !self.records_busy {
+                ui.add_space(8.0);
+                if ui
+                    .add(theme::primary_btn("📤 覆盖补传所画轨迹"))
+                    .on_hover_text("使用当前地图上规划的手绘途经点与路线，重新生成精准轨迹并覆盖上传至腾讯云 COS，救活 App 详情并替换为您自己画的路线")
+                    .clicked()
+                {
+                    do_reupload = true;
+                }
+            }
         });
+        if do_reupload {
+            self.reupload_obs_for_detail(rrid);
+        }
         ui.separator();
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -283,6 +297,89 @@ impl App {
             self.records_page.detail_loading = true;
             self.fetch_run_detail(rrid);
         }
+    }
+
+    /// 使用当前地图上手绘的途经点与路线设置，重新生成轨迹并覆盖上传腾讯云 COS（救活 App 详情中的“暂无数据”并替换为手绘路线）。
+    pub fn reupload_obs_for_detail(&mut self, rrid: i64) {
+        let raw = match &self.records_page.detail_raw {
+            Some(r) => r.clone(),
+            None => return,
+        };
+        let session = match self.session.clone() {
+            Some(s) => s,
+            None => {
+                self.status = "请先登录".into();
+                return;
+            }
+        };
+        let identity = self.identity.clone();
+        let config = self.config.clone();
+        let total_dis = raw.get("totalDis").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let total_time = raw.get("totalTime").and_then(|v| v.as_i64()).unwrap_or(0);
+        let start_time = raw.get("startTime").and_then(|v| v.as_i64()).unwrap_or(0);
+        let uuid = raw.get("uuid").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+        if total_dis <= 0.0 || total_time <= 0 || uuid.is_empty() {
+            self.status = "记录关键字段缺失，无法生成轨迹".into();
+            return;
+        }
+
+        self.records_busy = true;
+        self.status = format!("正在使用手绘途经点覆盖上传 rrid={rrid} 轨迹…");
+        let uid = session.uid;
+        self.spawn_job(move |tx| {
+            let mut log = App::logger(tx.clone());
+            let mut client = crate::api::client::ApiClient::new(identity, Some(session));
+            let anchor = client
+                .identity
+                .anchor_coordinate()
+                .unwrap_or_else(|_| crate::location::Coordinate::new(38.9, 121.54, 10.0).unwrap());
+
+            log("[obs-fix] 拉取实时打卡点…");
+            let pts = match crate::api::points::fetch_points(&mut client, anchor, &mut log) {
+                Ok(p) => p,
+                Err(e) => {
+                    log(&format!("❌ [obs-fix] 获取打卡点失败: {e}"));
+                    tx.send(format!("{}{e}", super::OBS_FIX_DONE)).ok();
+                    return;
+                }
+            };
+            let pts_bd = crate::api::points::points_bd(&pts);
+
+            log(&format!("[obs-fix] 正在为 rrid={rrid} 重构轨迹（里程={:.2}m，用时={}s）…", total_dis, total_time));
+            let track = if config.route_mode == "custom" && !config.custom_waypoints.is_empty() {
+                log(&format!("√ [obs-fix] 采纳您所手绘的自定义途经点 ({} 点，方式={}) 生成精准轨迹", config.custom_waypoints.len(), config.custom_close_mode));
+                let close_mode = crate::track::generate_road::CustomCloseMode::from_str(&config.custom_close_mode);
+                crate::track::generator::build_ordered_mode(
+                    total_dis,
+                    total_time,
+                    42,
+                    start_time,
+                    &config.custom_waypoints,
+                    close_mode,
+                    &pts_bd,
+                )
+            } else {
+                log("[obs-fix] 使用经典模式打卡点环生成轨迹");
+                crate::track::generator::build(total_dis, total_time, 42, (anchor.latitude, anchor.longitude), start_time, &pts_bd)
+            };
+
+            let obj = crate::track::wire::build_obs_object(&track, rrid, &uuid, uid, &pts);
+            let payload = obj.to_string().into_bytes();
+            let keys = crate::track::wire::obs_keys(&track, rrid, &uuid);
+
+            log("[obs-fix] 正在向腾讯云 COS 覆盖上传双 key（支持自动重试与代理兜底）…");
+            let ok = crate::api::obs::upload_both_keys(&mut client, &keys, &payload, &mut log);
+            if ok > 0 {
+                let msg = format!("√ 覆盖重传成功 ({ok}/2)！已将您手绘的 {} 个途经点轨迹完整写入云端，请在手机 App 下拉刷新查看！", config.custom_waypoints.len());
+                log(&msg);
+                tx.send(format!("{}{msg}", super::OBS_FIX_DONE)).ok();
+            } else {
+                let msg = "❌ 覆盖上传失败，请检查网络代理与网络连接".to_string();
+                log(&msg);
+                tx.send(format!("{}{msg}", super::OBS_FIX_DONE)).ok();
+            }
+        });
     }
 
     fn draw_ai_table(&mut self, ui: &mut egui::Ui) {

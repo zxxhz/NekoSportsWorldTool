@@ -539,7 +539,22 @@ fn cmd_obs_fix(rest: &[&str]) -> i32 {
         }
     };
     let pts_bd = crate::api::points::points_bd(&pts);
-    let track = crate::track::generator::build(dist, dur, 42, (anchor.latitude, anchor.longitude), start_ms, &pts_bd);
+    let config = crate::api::model::load_config();
+    let track = if config.route_mode == "custom" && !config.custom_waypoints.is_empty() {
+        println!("使用您所规划的自定义途经点 ({} 点，方式={}) 生成精准轨迹…", config.custom_waypoints.len(), config.custom_close_mode);
+        let close_mode = crate::track::generate_road::CustomCloseMode::from_str(&config.custom_close_mode);
+        crate::track::generator::build_ordered_mode(
+            dist,
+            dur,
+            42,
+            start_ms,
+            &config.custom_waypoints,
+            close_mode,
+            &pts_bd,
+        )
+    } else {
+        crate::track::generator::build(dist, dur, 42, (anchor.latitude, anchor.longitude), start_ms, &pts_bd)
+    };
     let obj = crate::track::wire::build_obs_object(&track, rrid, &uuid, uid, &pts);
     let payload = obj.to_string().into_bytes();
     let keys = crate::track::wire::obs_keys(&track, rrid, &uuid);
