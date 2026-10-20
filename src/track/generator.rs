@@ -40,7 +40,7 @@ pub fn fit_speeds_bounded(w: &mut [f64], dts: &[f64], target: f64, floor: f64, c
     }
 }
 
-/// 平滑 10 秒时间窗（严格锚定目标配速，在基准配速 ±10 秒狭窄走廊内平缓微波起伏，如 6'20" 严格浮动在 6'10"~6'30"）。
+/// 平滑 10 秒时间窗（围绕目标配速基准线自然起伏波动 ±28 秒左右，展现逼真的人类跑步生理波澜，如 6'20" 自然浮动在 5'52"~6'48"）。
 pub fn smooth_ten_sec_windows(
     dur: i64,
     dist: f64,
@@ -69,14 +69,15 @@ pub fn smooth_ten_sec_windows(
         let win_t = windows_speed[i].time as f64;
         let mid_t = (i as f64 * 10.0 + win_t * 0.5).min(dur_f);
         let u = (mid_t / dur_f.max(1.0)).clamp(0.0, 1.0);
-        // 微幅体能漂移：从 u=0 时的 -3秒（微快）渐变到 u=1 时的 +3秒（微慢）
+        // 体能节律趋势：前期微快（约 -8s），后程疲劳轻微放缓（约 +8s）
         let s_curve = 3.0 * u * u - 2.0 * u * u * u;
-        let trend_s = -3.0 + 6.0 * s_curve;
-        // 中周期自然节律微波：在 ±5 秒内柔和微澜起伏（约 2.5 分钟与 1.5 分钟周期）
-        let wave_s = 3.8 * (std::f64::consts::TAU * mid_t / 150.0 + phi1).sin()
-            + 2.2 * (std::f64::consts::TAU * mid_t / 90.0 + phi2).cos();
-        drift_s = 0.75 * drift_s + rng.gauss(0.0, 0.35);
-        let mut delta_s = (trend_s + wave_s + drift_s).clamp(-10.0, 10.0);
+        let trend_s = -8.0 + 16.0 * s_curve;
+        // 多尺度自然生理律动波：呼吸与肌肉收缩宏观波澜（幅度约 ±18s）
+        let wave_s = 10.0 * (std::f64::consts::TAU * mid_t / 140.0 + phi1).sin()
+            + 6.5 * (std::f64::consts::TAU * mid_t / 75.0 + phi2).cos()
+            + 4.0 * (std::f64::consts::TAU * mid_t / 35.0 + phi1 * 2.0).sin();
+        drift_s = 0.80 * drift_s + rng.gauss(0.0, 0.85);
+        let mut delta_s = (trend_s + wave_s + drift_s).clamp(-28.0, 28.0);
 
         // 若开启中途走步歇息设置：在行程 52%~64% 处（约中段）插入一次平滑自然的走步休整（配速放缓至 9'20"~9'40"，安全不标红）
         if allow_mid_slowdown && m >= 8 {
@@ -96,9 +97,9 @@ pub fn smooth_ten_sec_windows(
         speeds.push(cur_v);
     }
 
-    // 相邻窗口平滑限斜率（slew rate limiter）：改在【速度维度（m/s）】进行
+    // 相邻窗口平滑限斜率（slew rate limiter）：容许自然起伏的同时杜绝生硬台阶
     for i in 1..m {
-        let max_dv = 0.035;
+        let max_dv = 0.09;
         let diff = speeds[i] - speeds[i - 1];
         if diff.abs() > max_dv {
             speeds[i] = speeds[i - 1] + diff.signum() * max_dv;
@@ -106,7 +107,7 @@ pub fn smooth_ten_sec_windows(
     }
     // 逆向反扫一次，保证双向连续无突兀拐点
     for i in (0..m - 1).rev() {
-        let max_dv = 0.035;
+        let max_dv = 0.09;
         let diff = speeds[i] - speeds[i + 1];
         if diff.abs() > max_dv {
             speeds[i] = speeds[i + 1] + diff.signum() * max_dv;
@@ -268,15 +269,19 @@ fn build_from_ring(
     dts.push(1.0f64.max(dur_f - times[n - 1]));
 
     let base = (dist / dur_f).clamp(SPEED_FLOOR + 0.05, SPEED_CEIL - 0.05);
-    let local_floor = (base * 0.90).max(SPEED_FLOOR);
-    let local_ceil = (base * 1.10).min(SPEED_CEIL).max(local_floor + 0.05);
+    let allow_mid_slowdown = crate::api::model::load_config().allow_mid_slowdown;
+    let local_floor = if allow_mid_slowdown {
+        SPEED_FLOOR
+    } else {
+        (base * 0.80).max(SPEED_FLOOR)
+    };
+    let local_ceil = (base * 1.20).min(SPEED_CEIL).max(local_floor + 0.05);
 
-    // 严格锚定目标配速：在目标配速基准线上做 ±10 秒上下自然窄幅浮动（如 6'20" 严格浮动在 6'10"~6'30"）
+    // 围绕目标配速基准线自然起伏波动 ±28 秒左右，还原真实学生的跑步波动
     let base_pace_s = 1000.0 / base.max(0.1);
     let phi1 = ((seed & 0xFFFF) as f64 / 65535.0) * std::f64::consts::TAU;
     let phi2 = (((seed >> 16) & 0xFFFF) as f64 / 65535.0) * std::f64::consts::TAU;
 
-    let allow_mid_slowdown = crate::api::model::load_config().allow_mid_slowdown;
     let mut w = Vec::with_capacity(n);
     let mut drift_s = 0.0f64;
     for i in 0..n {
@@ -284,11 +289,12 @@ fn build_from_ring(
         let _dt = dts[i];
         let u = (tt / dur_f).clamp(0.0, 1.0);
         let s_curve = 3.0 * u * u - 2.0 * u * u * u;
-        let trend_s = -3.0 + 6.0 * s_curve;
-        let wave_s = 3.8 * (std::f64::consts::TAU * tt / 150.0 + phi1).sin()
-            + 2.2 * (std::f64::consts::TAU * tt / 90.0 + phi2).cos();
-        drift_s = 0.75 * drift_s + rng.gauss(0.0, 0.35);
-        let mut delta_s = (trend_s + wave_s + drift_s).clamp(-10.0, 10.0);
+        let trend_s = -8.0 + 16.0 * s_curve;
+        let wave_s = 10.0 * (std::f64::consts::TAU * tt / 140.0 + phi1).sin()
+            + 6.5 * (std::f64::consts::TAU * tt / 75.0 + phi2).cos()
+            + 4.0 * (std::f64::consts::TAU * tt / 35.0 + phi1 * 2.0).sin();
+        drift_s = 0.80 * drift_s + rng.gauss(0.0, 0.85);
+        let mut delta_s = (trend_s + wave_s + drift_s).clamp(-28.0, 28.0);
 
         // 若开启中途走步歇息：在行程 52%~64% 处平滑插入走步放慢（降至 9'20"~9'40"，安全不标红）
         if allow_mid_slowdown && n >= 20 {
@@ -428,8 +434,8 @@ fn build_from_ring(
         // 配合一阶 AR(1) 连续平滑，彻底消除梳子状高频尖峰与正反颠倒！
         let pace_min = 1000.0 / (avg_sp * 60.0);
         speed_drift = 0.82 * speed_drift + rng.gauss(0.0, 0.005);
-        let min_allowed_pace = if walk_dip > 0.05 { 4.0 } else { (base_pace_s - 10.5) / 60.0 };
-        let max_allowed_pace = if walk_dip > 0.05 { 9.8 } else { (base_pace_s + 10.5) / 60.0 };
+        let min_allowed_pace = if walk_dip > 0.05 { 4.0 } else { ((base_pace_s - 30.0) / 60.0).max(4.0) };
+        let max_allowed_pace = if walk_dip > 0.05 { 9.8 } else { ((base_pace_s + 30.0) / 60.0).min(9.8) };
         let point_pace = if i <= 1 {
             0.0
         } else {

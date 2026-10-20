@@ -257,23 +257,23 @@ mod validation_tests {
         );
         let base_pace_s = 1753.0 / (4125.0 / 1000.0); // 425.0s (7'05")
 
-        // 验证 10 秒时间窗严格在基准配速 ±10 秒狭窄走廊内微澜起伏（如 7'05" 严格浮动在 6'55"~7'15"）
+        // 验证 10 秒时间窗在基准配速自然生理波动走廊内生动起伏（如 7'05" 浮动在 6'35"~7'35" 内）
         assert!(!track.speedPerTenSec.is_empty());
         for win in &track.speedPerTenSec {
             let win_p = 1000.0 / (win.value / win.time as f64);
             assert!(
-                (win_p - base_pace_s).abs() <= 10.5,
-                "10秒窗配速 {:.1}s 越出目标基准配速 {:.1}s ±10秒波动走廊",
+                (win_p - base_pace_s).abs() <= 29.5,
+                "10秒窗配速 {:.1}s 越出目标基准配速 {:.1}s 自然波动走廊",
                 win_p, base_pace_s
             );
         }
 
-        // 验证 allLocJson 中的 speed 字段（App 解析的配速分/公里）严格处于 (base_pace ± 11s)/60 范围内
+        // 验证 allLocJson 中的 speed 字段（App 解析的配速分/公里）处于自然生理波澜范围内
         for loc in &track.locations[2..track.locations.len() - 1] {
             let loc_pace_s = loc.speed * 60.0;
             assert!(
-                (loc_pace_s - base_pace_s).abs() <= 11.0,
-                "定位点配速 {:.1}s 越出目标配速 {:.1}s ±10秒范围",
+                (loc_pace_s - base_pace_s).abs() <= 31.0,
+                "定位点配速 {:.1}s 越出目标配速 {:.1}s 自然波动范围",
                 loc_pace_s, base_pace_s
             );
         }

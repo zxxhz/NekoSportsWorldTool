@@ -998,8 +998,13 @@ fn build_track_from_route(
     };
     let base_v = avg_v.clamp(SPEED_FLOOR + 0.05, SPEED_CEIL - 0.05);
     let base_pace_s = 1000.0 / base_v.max(0.1);
-    let local_floor = (base_v * 0.90).max(SPEED_FLOOR);
-    let local_ceil = (base_v * 1.10).min(SPEED_CEIL).max(local_floor + 0.05);
+    let allow_mid_slowdown = crate::api::model::load_config().allow_mid_slowdown;
+    let local_floor = if allow_mid_slowdown {
+        SPEED_FLOOR
+    } else {
+        (base_v * 0.80).max(SPEED_FLOOR)
+    };
+    let local_ceil = (base_v * 1.20).min(SPEED_CEIL).max(local_floor + 0.05);
     let speed_seed = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
     let mut w = pace_profile(
         route,
@@ -1161,8 +1166,8 @@ fn build_track_from_route(
         // 配合一阶 AR(1) 连续平滑，彻底消除梳子状高频尖峰与正反颠倒！
         let pace_min = 1000.0 / (avg_sp * 60.0);
         speed_drift = 0.82 * speed_drift + rng.gauss(0.0, 0.005);
-        let min_allowed_pace = if walk_dip > 0.05 { 4.0 } else { (base_pace_s - 10.5) / 60.0 };
-        let max_allowed_pace = if walk_dip > 0.05 { 9.8 } else { (base_pace_s + 10.5) / 60.0 };
+        let min_allowed_pace = if walk_dip > 0.05 { 4.0 } else { ((base_pace_s - 30.0) / 60.0).max(4.0) };
+        let max_allowed_pace = if walk_dip > 0.05 { 9.8 } else { ((base_pace_s + 30.0) / 60.0).min(9.8) };
         let point_pace = if i <= 1 {
             0.0
         } else {

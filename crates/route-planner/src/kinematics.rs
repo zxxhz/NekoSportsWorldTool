@@ -92,7 +92,7 @@ pub fn pace_profile(
     let normal = Normal::<f64>::new(0.0, 1.0).unwrap();
     let total_time_est: f64 = dts.iter().sum::<f64>().max(1.0);
 
-    // ① 严格锚定目标配速：在目标配速基准线上做 ±10 秒上下自然窄幅浮动（如 6'20" 严格浮动在 6'10"~6'30"）
+    // ① 围绕目标配速基准线自然起伏波动 ±28 秒左右，还原真实人类跑步波动
     let base_pace_s = 1000.0 / v0.max(0.1);
     let mut w = Vec::with_capacity(n);
     let mut t = 0.0;
@@ -102,14 +102,15 @@ pub fn pace_profile(
 
     for &dt in dts {
         let u = (t / total_time_est).clamp(0.0, 1.0);
-        // 微幅体能漂移：从 u=0 时的 -3秒（微快）渐变到 u=1 时的 +3秒（微慢）
+        // 体能节律趋势：前期微快（约 -8s），后程疲劳轻微放缓（约 +8s）
         let s_curve = 3.0 * u * u - 2.0 * u * u * u;
-        let trend_s = -3.0 + 6.0 * s_curve;
-        // 中周期自然节律微波：在 ±5 秒内柔和微澜起伏
-        let wave_s = 3.8 * (std::f64::consts::TAU * t / 150.0 + phi1).sin()
-            + 2.2 * (std::f64::consts::TAU * t / 90.0 + phi2).cos();
-        drift_s = 0.75 * drift_s + 0.3 * normal.sample(&mut rng);
-        let delta_s = (trend_s + wave_s + drift_s).clamp(-10.0, 10.0);
+        let trend_s = -8.0 + 16.0 * s_curve;
+        // 多尺度自然生理律动波：呼吸与肌肉收缩宏观波澜
+        let wave_s = 10.0 * (std::f64::consts::TAU * t / 140.0 + phi1).sin()
+            + 6.5 * (std::f64::consts::TAU * t / 75.0 + phi2).cos()
+            + 4.0 * (std::f64::consts::TAU * t / 35.0 + phi1 * 2.0).sin();
+        drift_s = 0.80 * drift_s + 0.85 * normal.sample(&mut rng);
+        let delta_s = (trend_s + wave_s + drift_s).clamp(-28.0, 28.0);
         let cur_pace_s = (base_pace_s + delta_s).clamp(240.0, 600.0);
         let cur_v = (1000.0 / cur_pace_s).clamp(floor, ceil);
         w.push(cur_v);
