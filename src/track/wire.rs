@@ -319,7 +319,7 @@ mod validation_tests {
                     anomalous_bdg += 1;
                     println!("Point {} has bdG={}", i, loc.bdG);
                 }
-                if loc.ptype != 0 && loc.ptype != 3 && loc.ptype != 5 && loc.ptype != 6 {
+                if loc.ptype != 0 && loc.ptype != 5 && loc.ptype != 6 {
                     anomalous_ptype += 1;
                     println!("Point {} has ptype={}", i, loc.ptype);
                 }

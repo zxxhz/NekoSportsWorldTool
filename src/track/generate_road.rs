@@ -1017,16 +1017,10 @@ fn build_track_from_route(
         local_ceil,
     );
 
-    // 点位类型（同经典模式）
+    // 点位类型（同经典模式）：所有正常点统一为 type=0 纯绿有效点
     let mut kinds: Vec<(i64, i64)> = Vec::with_capacity(n);
     for _ in 0..n {
-        let u = rng.random();
-        // 全程纯绿有效定位点：type=0（62%）与 type=3（38%），绝不注入 type=1/2（暂停）或 type=-1（断点）
-        if u < 0.38 {
-            kinds.push((3, 1));
-        } else {
-            kinds.push((0, 1));
-        }
+        kinds.push((0, 1));
     }
 
     // 仅哨兵点 i<=1 不计位移，所有跑步过程中的正常点均连续向前推进
