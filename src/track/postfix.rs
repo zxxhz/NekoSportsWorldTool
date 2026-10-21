@@ -17,22 +17,19 @@ pub fn apply_post_fixes(locs: &mut [GenPoint], rng: &mut Rng, start_ms: i64) {
             let stop_t = locs[ci].totalTime + rng.randint(6, 14);
             locs[ci].totalTime = stop_t;
             locs[ci].validTime = stop_t;
-            // 收尾减速仍须落在有效配速窗口内（2.0-2.6 m/s ≈ 7.2-9.4 km/h）
-            let stop_ms = round_to(rng.uniform(2.0, 2.6), 4);
-            locs[ci].speed = round_to(stop_ms * 3.6, 4);
+            // 收尾减速仍须落在有效配速窗口内（2.0-2.6 m/s ≈ 6.4-8.3 分/公里）
+            let stop_ms = round_to(rng.uniform(2.0, 2.6), 2);
+            locs[ci].speed = round_to(1000.0 / (stop_ms * 60.0), 2);
             locs[ci].avgSpeed = stop_ms;
-            locs[ci].bdS = round_to(rng.uniform(0.05, 0.15), 3);
+            locs[ci].bdS = round_to(rng.uniform(0.05, 0.15), 2);
             locs[ci].gainTime = fmt_gain_time(start_ms + stop_t * 1000);
             locs[ci].gainTimeMs = start_ms + stop_t * 1000;
             // totalDis 保持（App 过滤条件 totalDis>0）
         }
     }
     if locs.len() > 2 {
-        // 起点哨兵（type=5→setStartPoint）：全零累计 + state=1，坐标与首点严格重合，速度平滑继承，避免起跑点间产生假性零速灰线
+        // 起点哨兵（type=5→setStartPoint）：全零累计 + state=1，坐标与首点严格重合（对齐官方真机样本）
         let (p0_lat, p0_lng) = (locs[0].gLat, locs[0].gLng);
-        let next_sp = if locs.len() > 2 { locs[2].avgSpeed } else { 2.5 };
-        let next_speed = if locs.len() > 2 { locs[2].speed } else { next_sp * 3.6 };
-        let next_bds = if locs.len() > 2 { locs[2].bdS } else { next_sp };
         let sp = &mut locs[1];
         sp.gLat = p0_lat;
         sp.gLng = p0_lng;
@@ -40,9 +37,9 @@ pub fn apply_post_fixes(locs: &mut [GenPoint], rng: &mut Rng, start_ms: i64) {
         sp.state = 1;
         sp.locType = 1;
         sp.radius = round_to(rng.uniform(2.0, 3.5), 2);
-        sp.speed = round_to(next_speed, 4);
-        sp.avgSpeed = round_to(next_sp, 4);
-        sp.bdS = round_to(next_bds, 4);
+        sp.speed = 0.0;
+        sp.avgSpeed = 0.0;
+        sp.bdS = 0.0;
         sp.totalDis = 0.0;
         sp.validDis = 0.0;
         sp.totalTime = 0;
@@ -61,7 +58,7 @@ pub fn apply_post_fixes(locs: &mut [GenPoint], rng: &mut Rng, start_ms: i64) {
         let p2 = &mut locs[2];
         if p2.avgSpeed <= 0.0 || p2.avgSpeed < crate::track::generator::SPEED_FLOOR {
             p2.avgSpeed = next_sp;
-            p2.speed = round_to(next_sp * 3.6, 4);
+            p2.speed = round_to(1000.0 / (next_sp * 60.0), 2);
         }
     }
     // 首点 = 起点：totalTime=0、type=0（标准正常绿点，移除 7 规避部分机型起步灰段）、速度取首个非零真实点

@@ -105,13 +105,49 @@ fn shorten(url: &str) -> &str {
     &url[start..end]
 }
 
-/// 回读验证（GET 签名）。
+/// 回读验证（GET 签名，带 10054 自动重试与代理回退）。
 #[allow(dead_code)]
 pub fn fetch_object(client: &mut ApiClient, key: &str, log: &mut dyn FnMut(&str)) -> Result<Value, String> {
     let signed = sign_url(client, "Get", key)?;
     let agent = super::client::make_agent();
-    let resp = agent.get(&signed).call().map_err(super::client::ureq_err)?;
-    let text = resp.into_string().unwrap_or_default();
+    let text = match agent.get(&signed).call() {
+        Ok(resp) => resp.into_string().unwrap_or_default(),
+        Err(e) => {
+            let err_str = super::client::ureq_err(e);
+            if err_str.contains("10054") || err_str.contains("reset") || err_str.contains("Connection") {
+                log("⚠ [obs] GET 回读检测到 10054 重置，尝试通过代理通道回读…");
+                let proxy_candidates = [
+                    "http://100.120.44.46:7890",
+                    "http://127.0.0.1:7890",
+                ];
+                let mut proxy_text = None;
+                for proxy_url in proxy_candidates {
+                    if let Ok(proxy) = ureq::Proxy::new(proxy_url) {
+                        let proxy_agent = ureq::AgentBuilder::new()
+                            .timeout(std::time::Duration::from_secs(15))
+                            .proxy(proxy)
+                            .build();
+                        log(&format!("[obs] 尝试通过代理 {proxy_url} 回读…"));
+                        match proxy_agent.get(&signed).call() {
+                            Ok(resp) => {
+                                if let Ok(txt) = resp.into_string() {
+                                    log(&format!("√ [obs] 通过代理 {proxy_url} 回读成功，字节数={}", txt.len()));
+                                    proxy_text = Some(txt);
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                log(&format!("⚠ [obs] 代理 {proxy_url} 回读失败: {e}"));
+                            }
+                        }
+                    }
+                }
+                proxy_text.ok_or(err_str)?
+            } else {
+                return Err(err_str);
+            }
+        }
+    };
     log(&format!("[obs] GET 回读 {} 字节", text.len()));
     serde_json::from_str(&text).map_err(|e| format!("OBS 对象解析失败: {e}"))
 }

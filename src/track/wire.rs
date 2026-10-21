@@ -40,15 +40,16 @@ fn gz_str(v: &str) -> String {
     gz(v.as_bytes())
 }
 
-/// 27 键协议点集（gen 点 → OBS 点；gLat/gLng 由 BD 转 GCJ）。
+/// 27 键协议点集（gen 点 → OBS 点；gLat/gLng 由 BD 转 GCJ，queueNum 映射对应 10s 分段序号）。
 pub fn conv_point(p: &GenPoint, start_ms: i64) -> Value {
     let (glat, glng) = bd09_to_gcj02(p.gLat, p.gLng);
+    let q_num = (p.totalTime / 10).max(0);
     json!({
-        "avgSpeed": round_to(p.avgSpeed, 4),
+        "avgSpeed": round_to(p.avgSpeed, 2),
         "bdA": round_to(p.bdA, 2),
         "bdD": round_to(p.bdD, 2),
         "bdG": p.bdG,
-        "bdS": round_to(p.bdS, 4),
+        "bdS": round_to(p.bdS, 2),
         "coorType": "gcj02",
         "count": p.count,
         "dtr": 0.0,
@@ -61,9 +62,9 @@ pub fn conv_point(p: &GenPoint, start_ms: i64) -> Value {
         "lng": -1.0,
         "locType": p.locType,
         "locationId": "",
-        "queueNum": p.queueNum,
+        "queueNum": q_num,
         "radius": round_to(p.radius, 2),
-        "speed": round_to(p.speed, 4),
+        "speed": round_to(p.speed, 2),
         "state": p.state,
         "stepDistance": 0.0,
         "totalDis": round_to(p.totalDis, 4),
@@ -268,18 +269,18 @@ mod validation_tests {
             );
         }
 
-        // 验证 allLocJson 中的 speed 字段（定位 SDK 原生时速 km/h）处于健康跑步速度区间，绝无走步低速
+        // 验证 allLocJson 中的 speed 字段（定位 SDK 瞬时配速分/公里）处于自然生理波澜范围内
         for loc in &track.locations[2..track.locations.len() - 1] {
+            let loc_pace_s = loc.speed * 60.0;
             assert!(
-                loc.speed >= crate::track::generator::SPEED_FLOOR * 3.6 - 1.5
-                    && loc.speed <= crate::track::generator::SPEED_CEIL * 3.6 + 1.5,
-                "定位点时速 {:.2} km/h 越出健康跑步速度区间",
-                loc.speed
+                (loc_pace_s - base_pace_s).abs() <= 31.0,
+                "定位点配速 {:.1}s 越出目标配速 {:.1}s 自然波动范围",
+                loc_pace_s, base_pace_s
             );
         }
-        // 验证起跑哨兵点与首点平滑承接真实起步点
+        // 验证首点平滑等于真实起步点，哨兵 1 为全零点（对齐官方真机样本）
         assert_eq!(track.locations[0].speed, track.locations[2].speed);
-        assert_eq!(track.locations[1].speed, track.locations[2].speed);
+        assert_eq!(track.locations[1].speed, 0.0);
     }
 
     #[test]
@@ -310,7 +311,7 @@ mod validation_tests {
             let mut zero_displacement = 0;
 
             for (i, loc) in track.locations.iter().enumerate() {
-                if loc.state != 1 {
+                if loc.state != 1 && loc.state != 2 && loc.state != 3 {
                     anomalous_state += 1;
                     println!("Point {} has state={}", i, loc.state);
                 }
@@ -341,11 +342,22 @@ mod validation_tests {
                     println!("Point {} conv_point speed={}", i, speed_val);
                 }
             }
-            assert_eq!(anomalous_state, 0, "不应存在非运动状态点");
+            assert_eq!(anomalous_state, 0, "不应存在异常状态点");
             assert_eq!(anomalous_bdg, 0, "不应存在丢星点");
             assert_eq!(anomalous_ptype, 0, "不应存在异常事件类型点");
             assert_eq!(zero_displacement, 0, "不应存在原地静止点");
             assert_eq!(anomalous_speed, 0, "不应存在零速点");
+
+            // 验证 segment_json 完整构建且状态恒为 0 正常运动段
+            let obj = build_obs_object(&track, 1340711571, "UUID-TEST", 16867125, &[]);
+            let raw_seg = crate::crypto::envelope::b64_decode(obj["segment_json"].as_str().unwrap()).unwrap();
+            let mut dec = flate2::read::GzDecoder::new(&raw_seg[..]);
+            use std::io::Read;
+            let mut s = String::new();
+            dec.read_to_string(&mut s).unwrap();
+            let segs_val: serde_json::Value = serde_json::from_str(&s).unwrap();
+            assert_eq!(segs_val.as_array().unwrap().len(), track.speedPerTenSec.len());
+            assert_eq!(segs_val[0]["state"], 0);
             println!("speedPerTenSec len: {}", track.speedPerTenSec.len());
             let mut slow_segments = 0;
             let mut fast_segments = 0;
@@ -462,7 +474,37 @@ fn build_laps(track: &Track, start_ms: i64) -> Vec<Value> {
     laps
 }
 
-/// 组装 10 键 OBS 对象（值均 gzip+base64；segment_json/runFaceCheck 为空串 gzip）。
+/// 构造 10 秒分段 segment_json（对齐官方真机样本，每 10 秒一段，state 恒为 0 正常运动段）。
+fn build_segments(track: &Track, start_ms: i64) -> Vec<Value> {
+    let mut segs = Vec::new();
+    let total_time = track.totalTime;
+    for (i, win_sp) in track.speedPerTenSec.iter().enumerate() {
+        let win_st = &track.stepsPerTenSec[i];
+        let lo = (i * 10) as i64;
+        let hi = ((i * 10 + win_sp.time as usize) as i64).min(total_time);
+        let win_t = (hi - lo).max(1) as f64;
+        let d = win_sp.value;
+        let st = win_st.value;
+        let pace_min = (win_t / 60.0) / (d / 1000.0).max(0.001);
+        let cad_spm = (st / (win_t / 60.0)).round() as i64;
+        segs.push(json!({
+            "avgSpeed": pace_min,
+            "avgStep": cad_spm,
+            "distance": d,
+            "endTime": start_ms + hi * 1000,
+            "flag": start_ms,
+            "id": i as i64 + 1,
+            "intervalStepModel": 1,
+            "originAvgStep": cad_spm,
+            "speedStandard": 900,
+            "startTime": start_ms + lo * 1000,
+            "state": 0,
+        }));
+    }
+    segs
+}
+
+/// 组装 10 键 OBS 对象（值均 gzip+base64；runFaceCheck 为空串 gzip）。
 pub fn build_obs_object(
     track: &Track,
     rrid: i64,
@@ -475,6 +517,7 @@ pub fn build_obs_object(
     let run_wrap = json!({ "allLocJson": Value::Array(pts).to_string(), "useZip": false });
     let (sp, stf) = build_windows(track, rrid);
     let laps = build_laps(track, start_ms);
+    let segs = build_segments(track, start_ms);
     let five = five_point_payload_for_track(live_points, Some(track), start_ms);
     let fx = json!({
         "fivePointJson": Value::Array(five).to_string(),
@@ -489,7 +532,7 @@ pub fn build_obs_object(
         "uid": gz_str(&uid.to_string()),
         "run_data": gz_json(&run_wrap),
         "fixed_point_json": gz_json(&fx),
-        "segment_json": gz_str(""),
+        "segment_json": gz_json(&Value::Array(segs)),
         "speed_json": gz_json(&Value::Array(sp)),
         "step_freq_json": gz_json(&Value::Array(stf)),
         "laps_json": gz_json(&Value::Array(laps)),

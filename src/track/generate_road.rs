@@ -1127,13 +1127,20 @@ fn build_track_from_route(
             },
             2,
         );
-        // 全程纯绿连续运动状态：state=1（绝不注入 state=2 静止标签，防止 App 误判为中途暂停）
-        let state = 1;
+        // 对齐官方真机样本：起步热身 state=1，巡航稳态以 state=2 为主（约 55%），活跃/加速 state=3（约 35%）
+        let state = if t_acc < 30.0 {
+            1
+        } else if rng.random() < 0.35 {
+            3
+        } else {
+            2
+        };
         dist_acc += d_step;
         let (lat, lng) = to_bd(px, py, c_lat, c_lng);
         alt += 0.04 * (82.0 - alt) + rng.gauss(0.0, alt_sigma);
+        // 生物力学联动：增加宏观生理节律波，有快有慢：172~192 spm
         let v_now = speeds[i];
-        // 起步慢、前 45 秒平滑爬升至均值，随后自然波动的步频节律
+        let _km_done = (t_acc / dur_f) * dist / 1000.0;
         let warmup_u = (t_acc / 45.0).clamp(0.0, 1.0);
         let warmup_s = 3.0 * warmup_u * warmup_u - 2.0 * warmup_u * warmup_u * warmup_u;
         let warmup_delta = -20.0 * (1.0 - warmup_s);
@@ -1160,17 +1167,14 @@ fn build_track_from_route(
         let nxt = pos(s + 2.0);
         let brg =
             ((nxt.0 - x).atan2(nxt.1 - y).to_degrees() + rng.gauss(0.0, 35.0)).rem_euclid(360.0);
-        let avg_sp = round_to((d_step / dt.max(0.1)).clamp(SPEED_FLOOR, SPEED_CEIL), 4);
-        // 关键规范：allLocJson 中的 speed 为高德/百度定位 SDK 采集的原生 GPS 时速（km/h）！
-        // 当时速在正常跑步区间（8.0~15.0 km/h）时，官方 App 地图画线判定为有效跑动并渲染为纯绿轨迹；
-        // 杜绝将其误填为分/公里配速（如 6.3~7.5），否则会被地图 SDK 误判为 <7km/h 的走步慢行并涂成灰色暂停！
-        let kmh = avg_sp * 3.6;
-        let speed_sigma = (kmh * 0.03).max(0.02);
-        speed_drift = 0.82 * speed_drift + rng.gauss(0.0, speed_sigma);
-        let gps_speed = if i <= 1 {
+        let avg_sp = round_to((d_step / dt.max(0.1)).clamp(SPEED_FLOOR, SPEED_CEIL), 2);
+        // 对齐真机样本：allLocJson 中的 speed 为当前瞬时配速（分/公里，如 4.83），avgSpeed 与 bdS 为瞬时米每秒（m/s，如 3.45）
+        let pace_min = round_to(1000.0 / (avg_sp * 60.0), 2);
+        speed_drift = 0.82 * speed_drift + rng.gauss(0.0, 0.005);
+        let point_pace = if i <= 1 {
             0.0
         } else {
-            round_to((kmh + speed_drift).clamp(SPEED_FLOOR * 3.6, SPEED_CEIL * 3.6), 4)
+            round_to(pace_min + speed_drift, 2)
         };
 
         ten_t += dt;
@@ -1201,7 +1205,7 @@ fn build_track_from_route(
             lng: -1.0,
             gLat: round_to(lat, 7),
             gLng: round_to(lng, 7),
-            speed: round_to(gps_speed, 4),
+            speed: point_pace,
             avgSpeed: avg_sp,
             radius: rad,
             accuracy: rad,
@@ -1220,7 +1224,7 @@ fn build_track_from_route(
             coorType: "gcj02".into(),
             bdA: round_to(alt, 2),
             bdD: round_to(brg, 2),
-            bdS: round_to(avg_sp, 4),
+            bdS: avg_sp,
             bdG: 1, // 全程 GPS 强信号有效，绝不注入 -1 丢星状态码，防止 App 将路段渲染为灰色线
             count: rng.randint(20, 88),
             dtr: 0.0,

@@ -329,13 +329,15 @@ mod tests {
         let pts: Vec<serde_json::Value> =
             serde_json::from_str(wrap["allLocJson"].as_str().unwrap()).unwrap();
         assert_eq!(pts[0].as_object().unwrap().len(), 27, "点键数必须 27");
-        // segment_json 是空串 gzip
+        // segment_json 为完整 10 秒分段数组 gzip
         let raw =
             crate::crypto::envelope::b64_decode(obj["segment_json"].as_str().unwrap()).unwrap();
         let mut dec = flate2::read::GzDecoder::new(&raw[..]);
         let mut s = String::new();
         dec.read_to_string(&mut s).unwrap();
-        assert_eq!(s, "");
+        let segs: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert!(segs.as_array().map_or(false, |a| !a.is_empty()), "segment_json 必须包含有效分段");
+        assert_eq!(segs[0]["state"], 0, "分段 state 必须为 0 正常运动");
         // obs keys 两个
         let ks = obs_keys(&track, 1320403809, "UUID-TEST");
         assert_eq!(ks.len(), 2);
