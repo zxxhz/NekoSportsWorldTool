@@ -984,7 +984,7 @@ fn build_track_from_route(
         t += if rng.random() < 0.80 {
             5.0
         } else {
-            rng.choice(&[1.0, 2.0, 3.0, 4.0, 6.0, 7.0, 8.0])
+            rng.choice(&[3.0, 4.0, 5.0, 5.0, 6.0, 7.0])
         };
     }
     let n = times.len();
@@ -997,7 +997,7 @@ fn build_track_from_route(
         ..Default::default()
     };
     let base_v = avg_v.clamp(SPEED_FLOOR + 0.05, SPEED_CEIL - 0.05);
-    let base_pace_s = 1000.0 / base_v.max(0.1);
+    let _base_pace_s = 1000.0 / base_v.max(0.1);
     let allow_mid_slowdown = crate::api::model::load_config().allow_mid_slowdown;
     let local_floor = if allow_mid_slowdown {
         SPEED_FLOOR
@@ -1161,20 +1161,16 @@ fn build_track_from_route(
         let brg =
             ((nxt.0 - x).atan2(nxt.1 - y).to_degrees() + rng.gauss(0.0, 35.0)).rem_euclid(360.0);
         let avg_sp = round_to((d_step / dt.max(0.1)).clamp(SPEED_FLOOR, SPEED_CEIL), 4);
-        // 关键修复：官方 App 的折线图直接将 allLocJson 中的 "speed" 字段解析为【配速（分/公里）】！
-        // 当配速快时数值较小（如 6.4 分/公里），慢时数值较大（如 7.8 分/公里），
-        // 配合一阶 AR(1) 连续平滑，彻底消除梳子状高频尖峰与正反颠倒！
-        let pace_min = 1000.0 / (avg_sp * 60.0);
-        speed_drift = 0.82 * speed_drift + rng.gauss(0.0, 0.005);
-        let min_allowed_pace = if walk_dip > 0.05 { 4.0 } else { ((base_pace_s - 30.0) / 60.0).max(4.0) };
-        let max_allowed_pace = if walk_dip > 0.05 { 9.8 } else { ((base_pace_s + 30.0) / 60.0).min(9.8) };
-        let point_pace = if i <= 1 {
+        // 关键规范：allLocJson 中的 speed 为高德/百度定位 SDK 采集的原生 GPS 时速（km/h）！
+        // 当时速在正常跑步区间（8.0~15.0 km/h）时，官方 App 地图画线判定为有效跑动并渲染为纯绿轨迹；
+        // 杜绝将其误填为分/公里配速（如 6.3~7.5），否则会被地图 SDK 误判为 <7km/h 的走步慢行并涂成灰色暂停！
+        let kmh = avg_sp * 3.6;
+        let speed_sigma = (kmh * 0.03).max(0.02);
+        speed_drift = 0.82 * speed_drift + rng.gauss(0.0, speed_sigma);
+        let gps_speed = if i <= 1 {
             0.0
         } else {
-            round_to(
-                (pace_min + speed_drift).clamp(min_allowed_pace, max_allowed_pace),
-                4,
-            )
+            round_to((kmh + speed_drift).clamp(SPEED_FLOOR * 3.6, SPEED_CEIL * 3.6), 4)
         };
 
         ten_t += dt;
@@ -1205,7 +1201,7 @@ fn build_track_from_route(
             lng: -1.0,
             gLat: round_to(lat, 7),
             gLng: round_to(lng, 7),
-            speed: round_to(point_pace, 4),
+            speed: round_to(gps_speed, 4),
             avgSpeed: avg_sp,
             radius: rad,
             accuracy: rad,

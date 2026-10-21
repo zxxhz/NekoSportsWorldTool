@@ -268,17 +268,108 @@ mod validation_tests {
             );
         }
 
-        // 验证 allLocJson 中的 speed 字段（App 解析的配速分/公里）处于自然生理波澜范围内
+        // 验证 allLocJson 中的 speed 字段（定位 SDK 原生时速 km/h）处于健康跑步速度区间，绝无走步低速
         for loc in &track.locations[2..track.locations.len() - 1] {
-            let loc_pace_s = loc.speed * 60.0;
             assert!(
-                (loc_pace_s - base_pace_s).abs() <= 31.0,
-                "定位点配速 {:.1}s 越出目标配速 {:.1}s 自然波动范围",
-                loc_pace_s, base_pace_s
+                loc.speed >= crate::track::generator::SPEED_FLOOR * 3.6 - 1.5
+                    && loc.speed <= crate::track::generator::SPEED_CEIL * 3.6 + 1.5,
+                "定位点时速 {:.2} km/h 越出健康跑步速度区间",
+                loc.speed
             );
         }
-        // 验证首点平滑等于真实起步点
+        // 验证起跑哨兵点与首点平滑承接真实起步点
         assert_eq!(track.locations[0].speed, track.locations[2].speed);
+        assert_eq!(track.locations[1].speed, track.locations[2].speed);
+    }
+
+    #[test]
+    fn test_user_real_track_for_pauses() {
+        let cfg_path = "C:/Users/Emoing/Desktop/运动世界/ocy/config.json";
+        if let Ok(content) = std::fs::read_to_string(cfg_path) {
+            let v: serde_json::Value = serde_json::from_str(&content).unwrap();
+            let wps_raw = v["custom_waypoints"].as_array().unwrap();
+            let wps: Vec<(f64, f64)> = wps_raw
+                .iter()
+                .map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap()))
+                .collect();
+            println!("Loaded {} custom waypoints", wps.len());
+            let track = crate::track::generator::build_ordered_mode(
+                4080.0,
+                1780,
+                42,
+                1_700_000_000_000,
+                &wps,
+                route_planner::CustomCloseMode::Open,
+                &wps,
+            );
+            println!("Generated track has {} locations", track.locations.len());
+            let mut anomalous_speed = 0;
+            let mut anomalous_state = 0;
+            let mut anomalous_ptype = 0;
+            let mut anomalous_bdg = 0;
+            let mut zero_displacement = 0;
+
+            for (i, loc) in track.locations.iter().enumerate() {
+                if loc.state != 1 {
+                    anomalous_state += 1;
+                    println!("Point {} has state={}", i, loc.state);
+                }
+                if loc.bdG != 1 {
+                    anomalous_bdg += 1;
+                    println!("Point {} has bdG={}", i, loc.bdG);
+                }
+                if loc.ptype != 0 && loc.ptype != 3 && loc.ptype != 5 && loc.ptype != 6 {
+                    anomalous_ptype += 1;
+                    println!("Point {} has ptype={}", i, loc.ptype);
+                }
+                if i > 1 && i < track.locations.len() - 1 {
+                    let prev = &track.locations[i - 1];
+                    let dlat = (loc.gLat - prev.gLat) * 111132.954;
+                    let dlng = (loc.gLng - prev.gLng) * 97262.284;
+                    let dist_step = (dlat * dlat + dlng * dlng).sqrt();
+                    if dist_step < 0.2 {
+                        zero_displacement += 1;
+                        println!("Point {} zero displacement: {:.3}m, totalDis={:.2}", i, dist_step, loc.totalDis);
+                    }
+                }
+                // Check conv_point representation
+                let p_val = conv_point(loc, track.startTime);
+                let speed_val = p_val["speed"].as_f64().unwrap();
+                let _avg_sp_val = p_val["avgSpeed"].as_f64().unwrap();
+                if speed_val <= 0.0 && i > 1 {
+                    anomalous_speed += 1;
+                    println!("Point {} conv_point speed={}", i, speed_val);
+                }
+            }
+            assert_eq!(anomalous_state, 0, "不应存在非运动状态点");
+            assert_eq!(anomalous_bdg, 0, "不应存在丢星点");
+            assert_eq!(anomalous_ptype, 0, "不应存在异常事件类型点");
+            assert_eq!(zero_displacement, 0, "不应存在原地静止点");
+            assert_eq!(anomalous_speed, 0, "不应存在零速点");
+            println!("speedPerTenSec len: {}", track.speedPerTenSec.len());
+            let mut slow_segments = 0;
+            let mut fast_segments = 0;
+            for i in 1..track.locations.len() {
+                let p0 = &track.locations[i - 1];
+                let p1 = &track.locations[i];
+                let (g0_lat, g0_lng) = bd09_to_gcj02(p0.gLat, p0.gLng);
+                let (g1_lat, g1_lng) = bd09_to_gcj02(p1.gLat, p1.gLng);
+                let dlat = (g1_lat - g0_lat) * 111132.954;
+                let dlng = (g1_lng - g0_lng) * 97262.284;
+                let d = (dlat * dlat + dlng * dlng).sqrt();
+                let dt = (p1.totalTime - p0.totalTime) as f64;
+                let v = if dt > 0.0 { d / dt } else { 0.0 };
+                if i > 2 && (v < 1.0 || d < 2.0) {
+                    slow_segments += 1;
+                    println!("Slow/stopped segment {}-{}: dist={:.2}m, dt={:.1}s, v={:.2}m/s", i - 1, i, d, dt, v);
+                }
+                if v > 6.0 {
+                    fast_segments += 1;
+                    println!("Fast segment {}-{}: dist={:.2}m, dt={:.1}s, v={:.2}m/s", i - 1, i, d, dt, v);
+                }
+            }
+            println!("TOTAL slow_segments: {}, fast_segments: {}", slow_segments, fast_segments);
+        }
     }
 }
 

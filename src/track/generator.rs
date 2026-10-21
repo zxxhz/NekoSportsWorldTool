@@ -79,13 +79,13 @@ pub fn smooth_ten_sec_windows(
         drift_s = 0.80 * drift_s + rng.gauss(0.0, 0.85);
         let mut delta_s = (trend_s + wave_s + drift_s).clamp(-28.0, 28.0);
 
-        // 若开启中途走步歇息设置：在行程 52%~64% 处（约中段）插入一次平滑自然的走步休整（配速放缓至 9'20"~9'40"，安全不标红）
+        // 若开启中途走步歇息设置：在行程 52%~64% 处（约中段）插入一次平滑自然的走步休整（配速放缓至约 8'10"，处于合规运动窗口内，杜绝触发暂停）
         if allow_mid_slowdown && m >= 8 {
             let u_mid = (u - 0.58) / 0.055;
             if u_mid.abs() < 2.5 {
                 let dip = (-0.5 * u_mid * u_mid).exp();
                 walk_dips[i] = dip;
-                let walk_pace_s = 568.0; // 约 9'28" 走步慢行（严格限制在 10'00" 标红线以内）
+                let walk_pace_s = 490.0; // 约 8'10" 走步慢行（严格限制在高校 8'30"~9'00" 合规限内）
                 let target_p = base_pace_s + delta_s;
                 let blended_p = target_p * (1.0 - 0.90 * dip) + walk_pace_s * (0.90 * dip);
                 delta_s = blended_p - base_pace_s;
@@ -261,7 +261,7 @@ fn build_from_ring(
         t += if rng.random() < 0.80 {
             5.0
         } else {
-            rng.choice(&[1.0, 2.0, 3.0, 4.0, 6.0, 7.0, 8.0])
+            rng.choice(&[3.0, 4.0, 5.0, 5.0, 6.0, 7.0])
         };
     }
     let n = times.len();
@@ -296,12 +296,12 @@ fn build_from_ring(
         drift_s = 0.80 * drift_s + rng.gauss(0.0, 0.85);
         let mut delta_s = (trend_s + wave_s + drift_s).clamp(-28.0, 28.0);
 
-        // 若开启中途走步歇息：在行程 52%~64% 处平滑插入走步放慢（降至 9'20"~9'40"，安全不标红）
+        // 若开启中途走步歇息：在行程 52%~64% 处平滑插入走步放慢（降至约 8'10"，处于合规运动窗口内，杜绝触发暂停）
         if allow_mid_slowdown && n >= 20 {
             let u_mid = (u - 0.58) / 0.055;
             if u_mid.abs() < 2.5 {
                 let dip = (-0.5 * u_mid * u_mid).exp();
-                let walk_pace_s = 568.0;
+                let walk_pace_s = 490.0;
                 let target_p = base_pace_s + delta_s;
                 let blended_p = target_p * (1.0 - 0.90 * dip) + walk_pace_s * (0.90 * dip);
                 delta_s = blended_p - base_pace_s;
@@ -429,20 +429,16 @@ fn build_from_ring(
         let brg =
             ((nxt.0 - x).atan2(nxt.1 - y).to_degrees() + rng.gauss(0.0, 35.0)).rem_euclid(360.0);
         let avg_sp = round_to((d_step / dt.max(0.1)).clamp(SPEED_FLOOR, SPEED_CEIL), 4);
-        // 关键修复：官方 App 的折线图直接将 allLocJson 中的 "speed" 字段解析为【配速（分/公里）】！
-        // 当配速快时数值较小（如 6.4 分/公里），慢时数值较大（如 7.8 分/公里），
-        // 配合一阶 AR(1) 连续平滑，彻底消除梳子状高频尖峰与正反颠倒！
-        let pace_min = 1000.0 / (avg_sp * 60.0);
-        speed_drift = 0.82 * speed_drift + rng.gauss(0.0, 0.005);
-        let min_allowed_pace = if walk_dip > 0.05 { 4.0 } else { ((base_pace_s - 30.0) / 60.0).max(4.0) };
-        let max_allowed_pace = if walk_dip > 0.05 { 9.8 } else { ((base_pace_s + 30.0) / 60.0).min(9.8) };
-        let point_pace = if i <= 1 {
+        // 关键规范：allLocJson 中的 speed 为高德/百度定位 SDK 采集的原生 GPS 时速（km/h）！
+        // 当时速在正常跑步区间（8.0~15.0 km/h）时，官方 App 地图画线判定为有效跑动并渲染为纯绿轨迹；
+        // 杜绝将其误填为分/公里配速（如 6.3~7.5），否则会被地图 SDK 误判为 <7km/h 的走步慢行并涂成灰色暂停！
+        let kmh = avg_sp * 3.6;
+        let speed_sigma = (kmh * 0.03).max(0.02);
+        speed_drift = 0.82 * speed_drift + rng.gauss(0.0, speed_sigma);
+        let gps_speed = if i <= 1 {
             0.0
         } else {
-            round_to(
-                (pace_min + speed_drift).clamp(min_allowed_pace, max_allowed_pace),
-                4,
-            )
+            round_to((kmh + speed_drift).clamp(SPEED_FLOOR * 3.6, SPEED_CEIL * 3.6), 4)
         };
 
         ten_t += dt;
@@ -469,7 +465,7 @@ fn build_from_ring(
             lng: -1.0,
             gLat: round_to(lat, 7),
             gLng: round_to(lng, 7),
-            speed: round_to(point_pace, 4),
+            speed: round_to(gps_speed, 4),
             avgSpeed: avg_sp,
             radius: rad,
             accuracy: rad,
