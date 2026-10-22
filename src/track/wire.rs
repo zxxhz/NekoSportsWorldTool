@@ -41,9 +41,18 @@ fn gz_str(v: &str) -> String {
 }
 
 /// 27 键协议点集（gen 点 → OBS 点；gLat/gLng 由 BD 转 GCJ，queueNum 映射对应 10s 分段序号）。
+#[allow(dead_code)]
 pub fn conv_point(p: &GenPoint, start_ms: i64) -> Value {
+    conv_point_bounded(p, start_ms, None)
+}
+
+/// 27 键协议点集（带 queueNum 分段上限约束，防止末尾延伸点超出 segment_json 边界）。
+pub fn conv_point_bounded(p: &GenPoint, start_ms: i64, max_queue_num: Option<i64>) -> Value {
     let (glat, glng) = bd09_to_gcj02(p.gLat, p.gLng);
-    let q_num = (p.totalTime / 10).max(0);
+    let mut q_num = (p.totalTime / 10).max(0);
+    if let Some(max_q) = max_queue_num {
+        q_num = q_num.min(max_q);
+    }
     json!({
         "avgSpeed": round_to(p.avgSpeed, 2),
         "bdA": round_to(p.bdA, 2),
@@ -513,7 +522,12 @@ pub fn build_obs_object(
     live_points: &[Value],
 ) -> Value {
     let start_ms = track.startTime;
-    let pts: Vec<Value> = track.locations.iter().map(|p| conv_point(p, start_ms)).collect();
+    let max_q = track.speedPerTenSec.len().saturating_sub(1) as i64;
+    let pts: Vec<Value> = track
+        .locations
+        .iter()
+        .map(|p| conv_point_bounded(p, start_ms, Some(max_q)))
+        .collect();
     let run_wrap = json!({ "allLocJson": Value::Array(pts).to_string(), "useZip": false });
     let (sp, stf) = build_windows(track, rrid);
     let laps = build_laps(track, start_ms);

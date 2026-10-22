@@ -316,12 +316,17 @@ impl App {
         let config = self.config.clone();
         let total_dis = raw.get("totalDis").and_then(|v| v.as_f64()).unwrap_or(0.0);
         let total_time = raw.get("totalTime").and_then(|v| v.as_i64()).unwrap_or(0);
-        let start_time = raw.get("startTime").and_then(|v| v.as_i64()).unwrap_or(0);
+        let mut start_time = raw.get("startTime").and_then(|v| v.as_i64()).unwrap_or(0);
         let uuid = raw.get("uuid").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
         if total_dis <= 0.0 || total_time <= 0 || uuid.is_empty() {
             self.status = "记录关键字段缺失，无法生成轨迹".into();
             return;
+        }
+
+        // 若历史记录缺失有效开始时间戳，根据当前时间安全倒推兜底
+        if start_time <= 0 {
+            start_time = crate::crypto::envelope::now_ms() - total_time * 1000;
         }
 
         self.records_busy = true;

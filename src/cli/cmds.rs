@@ -523,8 +523,15 @@ fn cmd_obs_fix(rest: &[&str]) -> i32 {
     };
     let dist = detail.total_dis;
     let dur = detail.total_time;
-    let start_ms = detail.start_time;
+    let mut start_ms = detail.start_time;
     let uuid = detail.uuid.clone();
+    if dist <= 0.0 || dur <= 0 || uuid.is_empty() {
+        eprintln!("错误: 记录关键字段缺失 (dist={dist}, dur={dur}, uuid={uuid})，无法生成轨迹");
+        return 1;
+    }
+    if start_ms <= 0 {
+        start_ms = crate::crypto::envelope::now_ms() - dur * 1000;
+    }
     println!("获取到记录：距离 {:.2}m, 时长 {}s, uuid={uuid}", dist, dur);
 
     let anchor = client

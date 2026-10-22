@@ -25,6 +25,35 @@ pub fn sign_url(client: &mut ApiClient, method: &str, key: &str) -> Result<Strin
     Ok(signed.to_string())
 }
 
+/// 获取可用于兜底上传的候选代理列表（优先环境变量与本机 127.0.0.1 代理，随后是备用通道）。
+fn get_proxy_candidates() -> Vec<String> {
+    let mut list = Vec::new();
+    for key in ["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"] {
+        if let Ok(v) = std::env::var(key) {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                let formatted = if !trimmed.starts_with("http://") && !trimmed.starts_with("socks5://") {
+                    format!("http://{trimmed}")
+                } else {
+                    trimmed.to_string()
+                };
+                if !list.contains(&formatted) {
+                    list.push(formatted);
+                }
+            }
+        }
+    }
+    let local = "http://127.0.0.1:7890".to_string();
+    if !list.contains(&local) {
+        list.push(local);
+    }
+    let remote = "http://100.120.44.46:7890".to_string();
+    if !list.contains(&remote) {
+        list.push(remote);
+    }
+    list
+}
+
 /// PUT 上传 OBS 对象（带自动重试与代理故障回退，彻底解决校园网/部分网络对腾讯云 COS 重置 10054 导致数据缺失）。
 pub fn put_object(signed_url: &str, payload: &[u8], log: &mut dyn FnMut(&str)) -> Result<(), String> {
     let mut last_err = String::new();
@@ -50,14 +79,11 @@ pub fn put_object(signed_url: &str, payload: &[u8], log: &mut dyn FnMut(&str)) -
     }
 
     // 2. 若直连遭遇 10054 (Connection was reset) 或网络拦截，尝试探测可用代理通道进行兜底上传
-    let proxy_candidates = [
-        "http://100.120.44.46:7890",
-        "http://127.0.0.1:7890",
-    ];
-    for proxy_url in proxy_candidates {
+    let proxy_candidates = get_proxy_candidates();
+    for proxy_url in &proxy_candidates {
         if let Ok(proxy) = ureq::Proxy::new(proxy_url) {
             let proxy_agent = ureq::AgentBuilder::new()
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(12))
                 .proxy(proxy)
                 .build();
             log(&format!("[obs] 正在尝试通过代理通道 {proxy_url} 兜底上传…"));
@@ -116,15 +142,12 @@ pub fn fetch_object(client: &mut ApiClient, key: &str, log: &mut dyn FnMut(&str)
             let err_str = super::client::ureq_err(e);
             if err_str.contains("10054") || err_str.contains("reset") || err_str.contains("Connection") {
                 log("⚠ [obs] GET 回读检测到 10054 重置，尝试通过代理通道回读…");
-                let proxy_candidates = [
-                    "http://100.120.44.46:7890",
-                    "http://127.0.0.1:7890",
-                ];
+                let proxy_candidates = get_proxy_candidates();
                 let mut proxy_text = None;
-                for proxy_url in proxy_candidates {
+                for proxy_url in &proxy_candidates {
                     if let Ok(proxy) = ureq::Proxy::new(proxy_url) {
                         let proxy_agent = ureq::AgentBuilder::new()
-                            .timeout(std::time::Duration::from_secs(15))
+                            .timeout(std::time::Duration::from_secs(10))
                             .proxy(proxy)
                             .build();
                         log(&format!("[obs] 尝试通过代理 {proxy_url} 回读…"));

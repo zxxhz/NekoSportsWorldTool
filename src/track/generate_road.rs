@@ -1017,6 +1017,19 @@ fn build_track_from_route(
         local_ceil,
     );
 
+    // 若开启中途走步歇息：在行程 52%~64% 处平滑插入走步放慢（降至约 8'10"，处于合规运动窗口内，杜绝触发暂停）
+    if allow_mid_slowdown && n >= 20 {
+        let walk_v = 1000.0 / 490.0; // 约 2.04 m/s (8'10"/km)
+        for i in 2..n {
+            let u = (times[i] / dur_f).clamp(0.0, 1.0);
+            let u_mid = (u - 0.58) / 0.055;
+            if u_mid.abs() < 2.5 {
+                let dip = (-0.5 * u_mid * u_mid).exp();
+                w[i] = w[i] * (1.0 - 0.90 * dip) + walk_v * (0.90 * dip);
+            }
+        }
+    }
+
     // 点位类型（同经典模式）：所有正常点统一为 type=0 纯绿有效点
     let mut kinds: Vec<(i64, i64)> = Vec::with_capacity(n);
     for _ in 0..n {
